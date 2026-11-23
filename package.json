@@ -1,0 +1,14 @@
+{
+  "name": "modelist-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build:wasm": "npx wasm-pack build crates/modelist-wasm --target web --out-dir ../../apps/web/src/wasm-pkg",
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm run build:wasm && npm --prefix apps/web run build",
+    "test:rust": "cargo test --workspace"
+  },
+  "devDependencies": {
+    "wasm-pack": "^0.15.1"
+  }
+}
