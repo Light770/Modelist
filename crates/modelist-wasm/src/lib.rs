@@ -1,14 +1,14 @@
-use modelist_core::blocks::{build_default_variables, build_template_pieces};
+use modelist_core::blocks::build_project_pieces;
 use modelist_core::grading::{compute_cross_size_qa, evaluate_graded_nest, CrossSizeQaRow};
 use modelist_core::interop::{
     compute_pdf_layout_plan, compute_pom_table, export_aama_rul, export_dxf_aama, export_pom_csv,
     export_svg_mm, import_dxf_aama, import_garmentcode_json, PomRow,
 };
 use modelist_core::model::{
-    det_id, BodyMeasurements, CornerRule, EaseSpec, EaseTable, EdgeRef, EvaluatedPiece, FabricSpec,
+    det_id, BodyMeasurements, CornerRule, EaseSpec, EdgeRef, EvaluatedPiece, FabricSpec,
     GradeMode, GrainRotationMode, HingeMode, NotchStyle, ParametricOp, ParametricVar,
-    PatternProject, SeamBinding, SeamDriver, SeamInterface, SeamType, SizeTable, StackAnchor,
-    StitchingGraph,
+    PatternProject, SeamBinding, SeamDriver, SeamInterface, SeamType, StackAnchor,
+    StitchingGraph, PatternPiece, remap_entity_ids,
 };
 use modelist_core::nesting::{compute_marker_plan, export_marker_svg, MarkerConfig};
 use modelist_core::offset::evaluate_piece;
@@ -28,10 +28,10 @@ use modelist_core::model::{
     fabric_bending_length_cm, fabric_role_key, is_fabric_variable, FabricFinish, FABRIC_PROPERTIES,
 };
 use modelist_sim3d::avatar::{AvatarBodyForm, AvatarPose};
-use modelist_sim3d::material::MaterialSet;
+use modelist_sim3d::material::{garment_role, MaterialSet};
 use modelist_sim3d::xpbd::{ClothSimSession, Sim3dOptions};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
@@ -71,6 +71,8 @@ struct DartInfo {
 #[derive(Serialize)]
 struct PieceSummary {
     id: String,
+    /// Garment (component) the piece belongs to.
+    component_id: String,
     name: String,
     code: String,
     cut_quantity: u16,
@@ -184,9 +186,24 @@ pub fn fabric_property_specs_json() -> String {
 }
 
 #[derive(Serialize)]
+struct ComponentSummary {
+    id: String,
+    name: String,
+    template_id: String,
+    layer: u8,
+    visible: bool,
+    visible_3d: bool,
+    piece_count: usize,
+}
+
+#[derive(Serialize)]
 struct UiSnapshot {
     project_name: String,
+    /// Template of the active component.
     template_id: String,
+    /// Garments of the project, in layer-independent creation order.
+    components: Vec<ComponentSummary>,
+    active_component_id: String,
     grade_mode: GradeMode,
     stack_anchor: StackAnchor,
     active_size: String,
@@ -230,6 +247,8 @@ pub struct ModelistSession {
     drag_op_id: Option<Uuid>,
     evaluated: Vec<EvaluatedPiece>,
     stitching: StitchingGraph,
+    /// Component index of each evaluated piece.
+    piece_component: Vec<usize>,
     graded_nest: HashMap<String, Vec<EvaluatedPiece>>,
     var_values: HashMap<String, f64>,
     var_errors: HashMap<String, String>,
@@ -261,6 +280,7 @@ impl ModelistSession {
             drag_op_id: None,
             evaluated: Vec::new(),
             stitching: StitchingGraph::default(),
+            piece_component: Vec::new(),
             graded_nest: HashMap::new(),
             var_values: HashMap::new(),
             var_errors: HashMap::new(),
@@ -302,13 +322,154 @@ impl ModelistSession {
         self.project.name = name.trim().to_string();
     }
 
+    // --- Garments (components) ---
+
+    /// Adds a garment drafted from a template, to the right of the others on the canvas and
+    /// one layer above them in the 3D fit. It becomes the active garment. `name` (the template
+    /// name in the UI language) is optional. Returns its id.
+    pub fn add_component(&mut self, template_id: &str, name: &str) -> String {
+        self.push_undo();
+        let tmpl = modelist_core::library::resolve_template_id(template_id);
+        let taken: HashSet<Uuid> = self.project.components.iter().map(|c| c.id).collect();
+        let seq = (1..)
+            .find(|n| !taken.contains(&det_id(&format!("component:{tmpl}:{n}"))))
+            .unwrap_or(1);
+        let max_x = self
+            .evaluated
+            .iter()
+            .flat_map(|e| e.cut_polyline.iter().chain(&e.seam_polyline).map(|p| p.x))
+            .fold(f64::NEG_INFINITY, f64::max);
+        // The template's own pieces start near x = 0: shift it past the existing ones.
+        let probe = modelist_core::library::new_component(tmpl, seq, modelist_core::model::Point2::ZERO);
+        let (probe_pieces, _, _, _) = modelist_core::blocks::build_component_pieces(&probe, &self.project.measurements);
+        let min_x = probe_pieces
+            .iter()
+            .flat_map(|p| p.seam_loop.edges.iter().map(|e| e.start.x))
+            .fold(f64::INFINITY, f64::min);
+        let dx = if max_x.is_finite() && min_x.is_finite() { max_x + 250.0 - min_x } else { 0.0 };
+        let mut comp = modelist_core::library::new_component(tmpl, seq, modelist_core::model::Point2::new(dx, 0.0));
+        comp.layer = self.project.components.iter().map(|c| c.layer).max().map(|l| l.saturating_add(1)).unwrap_or(0);
+        if !name.trim().is_empty() {
+            comp.name = name.trim().to_string();
+        }
+        let id = comp.id.to_string();
+        self.project.components.push(comp);
+        self.project.active_component = self.project.components.len() - 1;
+        self.walk_frame = None;
+        self.selected_edge = None;
+        self.recompute();
+        self.selected_piece = self
+            .evaluated
+            .iter()
+            .zip(&self.piece_component)
+            .find(|(_, &c)| c == self.project.active_component)
+            .map(|(e, _)| e.piece.id);
+        self.rebuild_render_buffers();
+        id
+    }
+
+    /// Removes a garment (the last one cannot be removed).
+    pub fn remove_component(&mut self, component_id: &str) {
+        let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) else {
+            return;
+        };
+        if self.project.components.len() <= 1 {
+            return;
+        }
+        self.push_undo();
+        self.project.components.remove(ci);
+        let active = self.project.active_component;
+        self.project.active_component = if active > ci { active - 1 } else { active.min(self.project.components.len() - 1) };
+        self.selected_piece = None;
+        self.selected_edge = None;
+        self.walk_frame = None;
+        self.recompute();
+    }
+
+    /// Makes a garment the one edits, parameters, fabrics and the timeline apply to.
+    pub fn set_active_component(&mut self, component_id: &str) {
+        let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) else {
+            return;
+        };
+        if ci != self.project.active_component {
+            self.project.active_component = ci;
+            if self.selected_piece.and_then(|p| self.component_of_piece(p)) != Some(ci) {
+                self.selected_piece = None;
+                self.selected_edge = None;
+            }
+            self.recompute();
+        }
+    }
+
+    pub fn rename_component(&mut self, component_id: &str, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        if let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) {
+            self.push_undo();
+            self.project.components[ci].name = name.to_string();
+        }
+    }
+
+    /// Garment layer in the 3D fit (0 = next to the body). Re-dresses the 3D fit when open.
+    pub fn set_component_layer(&mut self, component_id: &str, layer: u8) {
+        if let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) {
+            if self.project.components[ci].layer != layer {
+                self.push_undo();
+                self.project.components[ci].layer = layer;
+                self.recompute();
+            }
+        }
+    }
+
+    /// Moves a garment one place outward (worn over the next garment) or inward, swapping
+    /// layers with its neighbour; layers are then renumbered 0, 1, 2... in wearing order.
+    pub fn move_component_layer(&mut self, component_id: &str, outward: bool) {
+        let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) else {
+            return;
+        };
+        // Wearing order: by layer, then creation order.
+        let mut order: Vec<usize> = (0..self.project.components.len()).collect();
+        order.sort_by_key(|&i| (self.project.components[i].layer, i));
+        let pos = order.iter().position(|&i| i == ci).unwrap_or(0);
+        let target = if outward { pos + 1 } else { pos.wrapping_sub(1) };
+        if target >= order.len() {
+            return;
+        }
+        self.push_undo();
+        order.swap(pos, target);
+        for (rank, &i) in order.iter().enumerate() {
+            self.project.components[i].layer = rank.min(255) as u8;
+        }
+        self.recompute();
+    }
+
+    /// Shows or hides a garment everywhere (canvas, exports, 3D fit).
+    pub fn set_component_visible(&mut self, component_id: &str, visible: bool) {
+        if let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) {
+            if self.project.components[ci].visible != visible {
+                self.project.components[ci].visible = visible;
+                self.recompute();
+            }
+        }
+    }
+
+    /// Shows or hides a garment in the 3D fit only. A hidden garment is still worn, so hiding
+    /// an outer layer reveals what is under it without re-draping anything.
+    pub fn set_component_visible_3d(&mut self, component_id: &str, visible: bool) {
+        if let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) {
+            self.project.components[ci].visible_3d = visible;
+        }
+    }
+
     pub fn serialize_project_json(&self) -> String {
         serde_json::to_string_pretty(&self.project).unwrap_or_else(|_| "{}".into())
     }
 
     pub fn load_project_json(&mut self, json: &str) -> Result<(), JsValue> {
-        let mut parsed: PatternProject = serde_json::from_str(json)
-            .map_err(|e| JsValue::from_str(&format!("Invalid .modelist JSON: {e}")))?;
+        let mut parsed = PatternProject::from_json(json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid .modelist file: {e}")))?;
         parsed.normalize_fabrics();
         parsed.sync_fabric_variables();
         self.push_undo();
@@ -329,7 +490,7 @@ impl ModelistSession {
     }
 
     pub fn set_ease(&mut self, key: &str, val: f64) {
-        if !self.project.ease.set_by_key(key, val) {
+        if !self.project.comp_mut().ease.set_by_key(key, val) {
             return;
         }
         self.recompute();
@@ -337,13 +498,13 @@ impl ModelistSession {
 
     pub fn set_fabric_preset(&mut self, preset_id: &str) {
         self.push_undo();
-        self.project.fabric = FabricSpec::from_preset(preset_id);
+        self.project.comp_mut().fabric = FabricSpec::from_preset(preset_id);
         self.after_fabric_change();
     }
 
     pub fn set_fabric_color(&mut self, color_hex: &str) {
         if color_hex.starts_with('#') && color_hex.len() == 7 {
-            self.project.fabric.color_hex = color_hex.to_string();
+            self.project.comp_mut().fabric.color_hex = color_hex.to_string();
             self.after_fabric_change();
         }
     }
@@ -351,7 +512,7 @@ impl ModelistSession {
     /// Sets one physical property of the shell fabric (key from `fabric_property_specs_json`).
     /// Values are clamped to the property's valid range. Returns false for unknown keys.
     pub fn set_fabric_property(&mut self, key: &str, value: f64) -> bool {
-        if !self.project.fabric.set_property(key, value) {
+        if !self.project.comp_mut().fabric.set_property(key, value) {
             return false;
         }
         self.after_fabric_change();
@@ -362,17 +523,17 @@ impl ModelistSession {
     pub fn set_fabric_finish(&mut self, finish: &str) {
         let parsed: Result<FabricFinish, _> = serde_json::from_str(&format!("\"{finish}\""));
         if let Ok(f) = parsed {
-            self.project.fabric.finish = f;
+            self.project.comp_mut().fabric.finish = f;
             self.after_fabric_change();
         }
     }
 
     /// Restores the shell fabric's physical properties from its preset (keeps the colour).
     pub fn reset_fabric_to_preset(&mut self) {
-        if let Some(mut p) = FabricSpec::preset(&self.project.fabric.id) {
+        if let Some(mut p) = FabricSpec::preset(&self.project.comp_mut().fabric.id) {
             self.push_undo();
-            p.color_hex = self.project.fabric.color_hex.clone();
-            self.project.fabric = p;
+            p.color_hex = self.project.comp_mut().fabric.color_hex.clone();
+            self.project.comp_mut().fabric = p;
             self.after_fabric_change();
         }
     }
@@ -392,7 +553,7 @@ impl ModelistSession {
     /// Sets one physical property of a role's fabric (the role must have its own fabric).
     pub fn set_role_fabric_property(&mut self, role: &str, key: &str, value: f64) -> bool {
         let key_role = fabric_role_key(role);
-        let Some(rf) = self.project.role_fabrics.iter_mut().find(|r| r.role == key_role) else {
+        let Some(rf) = self.project.comp_mut().role_fabrics.iter_mut().find(|r| r.role == key_role) else {
             return false;
         };
         if !rf.fabric.set_property(key, value) {
@@ -404,7 +565,7 @@ impl ModelistSession {
 
     pub fn set_role_fabric_color(&mut self, role: &str, color_hex: &str) {
         let key_role = fabric_role_key(role);
-        if let Some(rf) = self.project.role_fabrics.iter_mut().find(|r| r.role == key_role) {
+        if let Some(rf) = self.project.comp_mut().role_fabrics.iter_mut().find(|r| r.role == key_role) {
             if color_hex.starts_with('#') && color_hex.len() == 7 {
                 rf.fabric.color_hex = color_hex.to_string();
                 self.after_fabric_change();
@@ -536,7 +697,7 @@ impl ModelistSession {
         for n in &mut copy.notches {
             n.edge_id = copy.seam_loop.edges.get(n.edge_idx).map(|e| e.id);
         }
-        self.project.custom_pieces.push(copy);
+        self.project.comp_mut().custom_pieces.push(copy);
         self.selected_piece = Some(new_id);
         self.selected_edge = None;
         self.recompute();
@@ -553,7 +714,7 @@ impl ModelistSession {
         let code = format!("DP-{count:02}");
         let piece = make_rect_pattern_piece(&clean_name, &code, x0, y0, x1, y1);
         let pid = piece.id;
-        self.project.custom_pieces.push(piece);
+        self.project.comp_mut().custom_pieces.push(piece);
         self.selected_piece = Some(pid);
         self.selected_edge = None;
         self.recompute();
@@ -571,13 +732,13 @@ impl ModelistSession {
             return;
         }
         self.push_undo();
-        if let Some(existing) = self.project.variables.iter_mut().find(|v| v.name == clean) {
+        if let Some(existing) = self.project.comp_mut().variables.iter_mut().find(|v| v.name == clean) {
             existing.expr = expr.to_string();
             if !description.is_empty() {
                 existing.description = description.to_string();
             }
         } else {
-            self.project.variables.push(ParametricVar {
+            self.project.comp_mut().variables.push(ParametricVar {
                 name: clean,
                 expr: expr.to_string(),
                 description: description.to_string(),
@@ -591,7 +752,7 @@ impl ModelistSession {
             return;
         }
         self.push_undo();
-        self.project.variables.retain(|v| v.name != name);
+        self.project.comp_mut().variables.retain(|v| v.name != name);
         self.recompute();
     }
 
@@ -645,6 +806,9 @@ impl ModelistSession {
 
     pub fn set_selection(&mut self, piece_id: Option<String>, edge_idx: Option<usize>) {
         self.selected_piece = piece_id.and_then(|s| Uuid::parse_str(&s).ok());
+        if let Some(ci) = self.selected_piece.and_then(|pid| self.component_of_piece(pid)) {
+            self.project.active_component = ci;
+        }
         self.selected_edge = match (self.selected_piece, edge_idx) {
             (Some(pid), Some(ei)) => Some((pid, ei)),
             _ => None,
@@ -800,6 +964,7 @@ impl ModelistSession {
         }
         if let Some(cp) = self
             .project
+            .comp_mut()
             .custom_pieces
             .iter_mut()
             .find(|p| p.id == pid)
@@ -1229,27 +1394,27 @@ impl ModelistSession {
         let Ok(oid) = Uuid::parse_str(op_id) else {
             return;
         };
-        let Some(pos) = self.project.ops.iter().position(|o| o.id() == oid) else {
+        let Some(pos) = self.project.comp_mut().ops.iter().position(|o| o.id() == oid) else {
             return;
         };
         self.push_undo();
-        self.project.ops.remove(pos);
-        self.project.suppressed_ops.retain(|id| *id != oid);
-        if let Some(rb) = self.project.rollback_index {
+        self.project.comp_mut().ops.remove(pos);
+        self.project.comp_mut().suppressed_ops.retain(|id| *id != oid);
+        if let Some(rb) = self.project.comp_mut().rollback_index {
             if pos < rb {
-                self.project.rollback_index = Some(rb.saturating_sub(1));
-            } else if rb > self.project.ops.len() {
-                self.project.rollback_index = None;
+                self.project.comp_mut().rollback_index = Some(rb.saturating_sub(1));
+            } else if rb > self.project.comp_mut().ops.len() {
+                self.project.comp_mut().rollback_index = None;
             }
         }
         self.recompute();
     }
 
     pub fn set_rollback_index(&mut self, index: i32) {
-        if index < 0 || (index as usize) >= self.project.ops.len() {
-            self.project.rollback_index = None;
+        if index < 0 || (index as usize) >= self.project.comp_mut().ops.len() {
+            self.project.comp_mut().rollback_index = None;
         } else {
-            self.project.rollback_index = Some(index as usize);
+            self.project.comp_mut().rollback_index = Some(index as usize);
         }
         self.recompute();
     }
@@ -1259,31 +1424,31 @@ impl ModelistSession {
             return;
         };
         self.push_undo();
-        if let Some(pos) = self.project.suppressed_ops.iter().position(|id| *id == oid) {
-            self.project.suppressed_ops.remove(pos);
+        if let Some(pos) = self.project.comp_mut().suppressed_ops.iter().position(|id| *id == oid) {
+            self.project.comp_mut().suppressed_ops.remove(pos);
         } else {
-            self.project.suppressed_ops.push(oid);
+            self.project.comp_mut().suppressed_ops.push(oid);
         }
         self.recompute();
     }
 
     pub fn reorder_op(&mut self, from_idx: usize, to_idx: usize) -> bool {
-        let n = self.project.ops.len();
+        let n = self.project.comp_mut().ops.len();
         if from_idx >= n || to_idx >= n || from_idx == to_idx {
             return false;
         }
-        let (min_idx, max_idx) = compute_reorder_range(&self.project.ops, from_idx);
+        let (min_idx, max_idx) = compute_reorder_range(&self.project.comp_mut().ops, from_idx);
         if to_idx < min_idx || to_idx > max_idx {
             return false;
         }
         self.push_undo();
-        let op = self.project.ops.remove(from_idx);
-        self.project.ops.insert(to_idx, op);
-        if let Some(rb) = self.project.rollback_index {
+        let op = self.project.comp_mut().ops.remove(from_idx);
+        self.project.comp_mut().ops.insert(to_idx, op);
+        if let Some(rb) = self.project.comp_mut().rollback_index {
             if from_idx < rb && to_idx >= rb {
-                self.project.rollback_index = Some(rb.saturating_sub(1));
+                self.project.comp_mut().rollback_index = Some(rb.saturating_sub(1));
             } else if from_idx >= rb && to_idx < rb {
-                self.project.rollback_index = Some(rb + 1);
+                self.project.comp_mut().rollback_index = Some(rb + 1);
             }
         }
         self.recompute();
@@ -1294,11 +1459,11 @@ impl ModelistSession {
         let oid = Uuid::parse_str(op_id).map_err(|e| JsValue::from_str(&e.to_string()))?;
         let patch: serde_json::Value =
             serde_json::from_str(patch_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let Some(pos) = self.project.ops.iter().position(|o| o.id() == oid) else {
+        let Some(pos) = self.project.comp_mut().ops.iter().position(|o| o.id() == oid) else {
             return Err(JsValue::from_str("Operation not found in timeline"));
         };
         self.push_undo();
-        if let Err(err) = patch_op_from_json(&mut self.project.ops[pos], &patch) {
+        if let Err(err) = patch_op_from_json(&mut self.project.comp_mut().ops[pos], &patch) {
             self.undo_stack.pop();
             return Err(JsValue::from_str(&err));
         }
@@ -1397,21 +1562,12 @@ impl ModelistSession {
             "neutral" => AvatarBodyForm::Neutral,
             _ => AvatarBodyForm::Female,
         };
-        let raw_pieces: Vec<_> = self.evaluated.iter().map(|e| e.piece.clone()).collect();
         let options = Sim3dOptions {
             mesh_spacing_mm: spacing_mm,
             enable_self_collision: self_collision,
             ..Sim3dOptions::default()
         };
-        let sim = ClothSimSession::new_with_options(
-            &raw_pieces,
-            &self.stitching,
-            &self.project.measurements,
-            &MaterialSet::from_project(&self.project),
-            avatar_pose,
-            avatar_form,
-            options,
-        );
+        let sim = self.build_sim_with_options(avatar_pose, avatar_form, options);
         let stats_json = serde_json::to_string(&sim.stats()).unwrap_or_else(|_| "{}".into());
         self.sim3d = Some(sim);
         stats_json
@@ -1586,7 +1742,16 @@ impl ModelistSession {
 
     pub fn get_sim3d_cloth_indices(&self) -> js_sys::Uint32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Uint32Array::from(s.render_indices()),
+            Some(s) => {
+                // Garments hidden in 3D are still worn (simulated), just not drawn.
+                let shown: Vec<bool> = (0..self.evaluated.len())
+                    .map(|ei| {
+                        let ci = self.piece_component.get(ei).copied().unwrap_or(0);
+                        self.project.components.get(ci).map(|c| c.visible_3d).unwrap_or(true)
+                    })
+                    .collect();
+                js_sys::Uint32Array::from(&s.render_indices_shown(&shown)[..])
+            }
             None => js_sys::Uint32Array::new_with_length(0),
         }
     }
@@ -1636,6 +1801,7 @@ impl ModelistSession {
 
         let ease: Vec<MeasurementItem> = self
             .project
+            .comp()
             .ease
             .entries()
             .into_iter()
@@ -1650,6 +1816,7 @@ impl ModelistSession {
 
         let variables: Vec<VarSummary> = self
             .project
+            .comp()
             .variables
             .iter()
             .map(|v| VarSummary {
@@ -1664,8 +1831,15 @@ impl ModelistSession {
         let pieces: Vec<PieceSummary> = self
             .evaluated
             .iter()
-            .map(|ep| {
+            .enumerate()
+            .map(|(ei, ep)| {
                 let p = &ep.piece;
+                let component_id = self
+                    .project
+                    .components
+                    .get(self.piece_component.get(ei).copied().unwrap_or(0))
+                    .map(|c| c.id.to_string())
+                    .unwrap_or_default();
                 let edges = p
                     .seam_loop
                     .edges
@@ -1701,6 +1875,7 @@ impl ModelistSession {
                     .collect();
                 PieceSummary {
                     id: p.id.to_string(),
+                    component_id,
                     name: p.name.clone(),
                     code: p.code.clone(),
                     cut_quantity: p.cut_quantity,
@@ -1790,16 +1965,32 @@ impl ModelistSession {
 
         let snap = UiSnapshot {
             project_name: self.project.name.clone(),
-            template_id: self.project.template_id.clone(),
+            template_id: self.project.comp().template_id.clone(),
+            components: self
+                .project
+                .components
+                .iter()
+                .enumerate()
+                .map(|(ci, c)| ComponentSummary {
+                    id: c.id.to_string(),
+                    name: c.name.clone(),
+                    template_id: c.template_id.clone(),
+                    layer: c.layer,
+                    visible: c.visible,
+                    visible_3d: c.visible_3d,
+                    piece_count: self.piece_component.iter().filter(|&&k| k == ci).count(),
+                })
+                .collect(),
+            active_component_id: self.project.comp().id.to_string(),
             grade_mode: self.project.grade_mode,
             stack_anchor: self.project.stack_anchor,
             active_size: self.project.size_table.active_size.clone(),
             sizes: self.project.size_table.sizes.clone(),
             visible_sizes: self.project.size_table.visible_sizes.clone(),
-            fabric: self.project.fabric.clone(),
+            fabric: self.project.comp().fabric.clone(),
             fabric_catalog: FabricSpec::catalog(),
-            fabric_edited: fabric_edited(&self.project.fabric),
-            fabric_metrics: fabric_metrics(&self.project.fabric),
+            fabric_edited: fabric_edited(&self.project.comp().fabric),
+            fabric_metrics: fabric_metrics(&self.project.comp().fabric),
             role_fabrics: self.role_fabric_infos(),
             measurements,
             ease,
@@ -1807,7 +1998,7 @@ impl ModelistSession {
             pieces,
             stitching_links,
             ops,
-            rollback_index: self.project.rollback_index,
+            rollback_index: self.project.comp().rollback_index,
             qa_matrix,
             pom_rows,
             labels: self.render_buffers.labels.clone(),
@@ -1826,7 +2017,8 @@ impl ModelistSession {
     }
 
     pub fn export_dxf_aama(&self) -> String {
-        export_dxf_aama(&self.evaluated, &self.project.size_table.active_size)
+        let shown: Vec<EvaluatedPiece> = self.evaluated.iter().filter(|e| e.piece.visible).cloned().collect();
+        export_dxf_aama(&shown, &self.project.size_table.active_size)
     }
 
     pub fn export_aama_rul(&self) -> String {
@@ -1834,9 +2026,10 @@ impl ModelistSession {
     }
 
     pub fn import_dxf_aama(&mut self, dxf_text: &str) -> Result<String, JsValue> {
-        let imported = import_dxf_aama(dxf_text).map_err(|e| JsValue::from_str(&e))?;
+        let mut imported = import_dxf_aama(dxf_text).map_err(|e| JsValue::from_str(&e))?;
         let count = imported.len();
         self.push_undo();
+        self.dedupe_imported_ids(&mut imported, &mut []);
         let max_x = self
             .evaluated
             .iter()
@@ -1861,7 +2054,7 @@ impl ModelistSession {
             }
             p.grainline.start.x += dx;
             p.grainline.end.x += dx;
-            self.project.custom_pieces.push(p);
+            self.project.comp_mut().custom_pieces.push(p);
         }
         self.recompute();
         if let Some(last) = self.evaluated.last() {
@@ -1872,11 +2065,12 @@ impl ModelistSession {
     }
 
     pub fn import_garmentcode_json(&mut self, json_text: &str) -> Result<String, JsValue> {
-        let (pieces, bindings) =
+        let (mut pieces, mut bindings) =
             import_garmentcode_json(json_text).map_err(|e| JsValue::from_str(&e))?;
         let p_count = pieces.len();
         let b_count = bindings.len();
         self.push_undo();
+        self.dedupe_imported_ids(&mut pieces, &mut bindings);
         let max_x = self
             .evaluated
             .iter()
@@ -1891,7 +2085,7 @@ impl ModelistSession {
             }
             p.grainline.start.x += dx;
             p.grainline.end.x += dx;
-            self.project.custom_pieces.push(p);
+            self.project.comp_mut().custom_pieces.push(p);
         }
         for b in bindings {
             let oid = self.next_op_id("gc_binding");
@@ -1958,42 +2152,7 @@ pub fn template_catalog_json() -> String {
 
 impl ModelistSession {
     fn make_project(template_id: &str) -> PatternProject {
-        let tmpl = modelist_core::library::resolve_template_id(template_id);
-        let info = modelist_core::library::find_template(tmpl);
-        let name = info.map(|t| t.name).unwrap_or("Untitled Pattern");
-        let fabric = info
-            .map(|t| FabricSpec::from_preset(t.default_fabric))
-            .unwrap_or_default();
-        let role_fabrics = info
-            .map(|t| {
-                t.role_fabrics
-                    .iter()
-                    .map(|(role, preset)| modelist_core::model::RoleFabric {
-                        role: fabric_role_key(role),
-                        fabric: FabricSpec::from_preset(preset),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut project = PatternProject {
-            id: det_id(&format!("project:{tmpl}")),
-            name: name.into(),
-            template_id: tmpl.into(),
-            measurements: BodyMeasurements::default(),
-            ease: EaseTable::default(),
-            fabric,
-            role_fabrics,
-            variables: build_default_variables(tmpl),
-            size_table: SizeTable::default(),
-            grade_mode: GradeMode::ParametricMtm,
-            stack_anchor: StackAnchor::GrainlineMidpoint,
-            ops: Vec::new(),
-            custom_pieces: Vec::new(),
-            suppressed_ops: Vec::new(),
-            rollback_index: None,
-        };
-        project.sync_fabric_variables();
-        project
+        modelist_core::library::new_project(template_id)
     }
 
     /// Applies a fabric edit: migrates/clamps, mirrors fabric values into formula variables,
@@ -2003,6 +2162,7 @@ impl ModelistSession {
         let vars_changed = self.project.sync_fabric_variables();
         let formulas_depend = self
             .project
+            .comp()
             .variables
             .iter()
             .any(|v| !is_fabric_variable(&v.name) && v.expr.contains("fabric_"));
@@ -2015,7 +2175,11 @@ impl ModelistSession {
 
     fn role_fabric_infos(&self) -> Vec<RoleFabricInfo> {
         let mut out: Vec<RoleFabricInfo> = Vec::new();
-        for ep in &self.evaluated {
+        let active = self.project.active_component;
+        for (ei, ep) in self.evaluated.iter().enumerate() {
+            if self.piece_component.get(ei).copied().unwrap_or(0) != active {
+                continue;
+            }
             let key = fabric_role_key(&ep.piece.fabric_role);
             if key == "shell" || out.iter().any(|r| r.role == key) {
                 continue;
@@ -2023,6 +2187,7 @@ impl ModelistSession {
             out.push(RoleFabricInfo {
                 fabric: self
                     .project
+                    .comp()
                     .role_fabrics
                     .iter()
                     .find(|r| r.role == key)
@@ -2042,25 +2207,74 @@ impl ModelistSession {
         self.redo_stack.clear();
     }
 
+    /// IDs already used by the project, including template-drafted pieces, edges and seams.
+    fn used_ids(&self) -> HashSet<Uuid> {
+        let mut ids = self.project.stored_ids();
+        for ep in &self.evaluated {
+            ids.insert(ep.piece.id);
+            ids.extend(ep.piece.seam_loop.edges.iter().map(|e| e.id));
+        }
+        for b in &self.stitching.bindings {
+            ids.insert(b.id);
+        }
+        ids
+    }
+
+    /// A deterministic ID that nothing in the project uses yet. The counter restarts with every
+    /// session, so after opening a file it skips the IDs that file already holds.
     fn next_op_id(&mut self, tag: &str) -> Uuid {
-        self.op_counter += 1;
-        det_id(&format!("op:{tag}:{}", self.op_counter))
+        let used = self.used_ids();
+        loop {
+            self.op_counter += 1;
+            let id = det_id(&format!("op:{tag}:{}", self.op_counter));
+            if !used.contains(&id) {
+                return id;
+            }
+        }
+    }
+
+    /// Imported pieces carry IDs derived from the file content, so importing the same file twice
+    /// would duplicate them. On any collision, move the whole import into a fresh namespace.
+    fn dedupe_imported_ids(&mut self, pieces: &mut [PatternPiece], bindings: &mut [SeamBinding]) {
+        let used = self.used_ids();
+        let mut seen = HashSet::new();
+        let clash = pieces.iter().any(|p| {
+            used.contains(&p.id)
+                || !seen.insert(p.id)
+                || p.seam_loop.edges.iter().any(|e| used.contains(&e.id))
+        }) || bindings.iter().any(|b| used.contains(&b.id));
+        if clash {
+            let ns = self.next_op_id("import");
+            remap_entity_ids(pieces, bindings, &ns.to_string());
+        }
+    }
+
+    /// Component that owns a piece (as last evaluated).
+    fn component_of_piece(&self, pid: Uuid) -> Option<usize> {
+        self.evaluated
+            .iter()
+            .position(|e| e.piece.id == pid)
+            .and_then(|ei| self.piece_component.get(ei).copied())
     }
 
     fn insert_op(&mut self, op: ParametricOp) {
-        if let Some(rb) = self.project.rollback_index {
-            let idx = rb.min(self.project.ops.len());
-            self.project.ops.insert(idx, op);
-            self.project.rollback_index = Some(idx + 1);
+        // An op belongs to the garment of the piece it edits (else the active garment).
+        if let Some(ci) = op.target_piece_ids().first().and_then(|pid| self.component_of_piece(*pid)) {
+            self.project.active_component = ci;
+        }
+        if let Some(rb) = self.project.comp_mut().rollback_index {
+            let idx = rb.min(self.project.comp_mut().ops.len());
+            self.project.comp_mut().ops.insert(idx, op);
+            self.project.comp_mut().rollback_index = Some(idx + 1);
         } else {
-            let ops = &mut self.project.ops;
+            let ops = &mut self.project.comp_mut().ops;
             ops.push(op);
         }
     }
 
     fn upsert_op(&mut self, op: ParametricOp) {
-        if let Some(pos) = self.project.ops.iter().position(|o| o.id() == op.id()) {
-            self.project.ops[pos] = op;
+        if let Some(pos) = self.project.comp_mut().ops.iter().position(|o| o.id() == op.id()) {
+            self.project.comp_mut().ops[pos] = op;
         } else {
             self.insert_op(op);
         }
@@ -2068,15 +2282,9 @@ impl ModelistSession {
 
     fn recompute(&mut self) {
         let t0 = now_ms();
-        let active_ops = self.project.active_ops();
-        let (pieces, stitching, var_values, var_errors) = build_template_pieces(
-            &self.project.template_id,
-            &self.project.measurements,
-            &self.project.ease,
-            &self.project.variables,
-            &active_ops,
-            &self.project.custom_pieces,
-        );
+        let draft = build_project_pieces(&self.project, &self.project.measurements);
+        let pieces = draft.pieces;
+        let stitching = draft.stitching;
         let mut evaluated: Vec<EvaluatedPiece> = pieces
             .iter()
             .map(|p| evaluate_piece(p, &stitching.bindings, &pieces))
@@ -2088,11 +2296,13 @@ impl ModelistSession {
         let graded_nest = evaluate_graded_nest(&self.project, &evaluated, &stitching.bindings);
         let snap_index = SpatialSnapIndex::build(&evaluated);
 
+        let active = self.project.active_component.min(self.project.components.len() - 1);
         self.evaluated = evaluated;
         self.stitching = stitching;
+        self.piece_component = draft.piece_component;
         self.graded_nest = graded_nest;
-        self.var_values = var_values;
-        self.var_errors = var_errors;
+        self.var_values = draft.var_values.get(active).cloned().unwrap_or_default();
+        self.var_errors = draft.var_errors.get(active).cloned().unwrap_or_default();
         self.snap_index = snap_index;
         self.rebuild_render_buffers();
 
@@ -2100,18 +2310,43 @@ impl ModelistSession {
         if let Some(prev_sim) = self.sim3d.take() {
             let pose = prev_sim.avatar.pose;
             let body_form = prev_sim.avatar.body_form;
-            let next_sim = ClothSimSession::new_with_materials(
-                &pieces,
-                &self.stitching,
-                &self.project.measurements,
-                &MaterialSet::from_project(&self.project),
-                pose,
-                body_form,
-            );
-            self.sim3d = Some(next_sim);
+            self.sim3d = Some(self.build_sim(pose, body_form));
         }
 
         self.solve_ms = (now_ms() - t0).max(0.01);
+    }
+
+    /// The 3D fit of every garment: each one dressed at its component's layer, with its own
+    /// fabrics (roles qualified by garment).
+    fn build_sim(&self, pose: AvatarPose, body_form: AvatarBodyForm) -> ClothSimSession {
+        self.build_sim_with_options(pose, body_form, Sim3dOptions::default())
+    }
+
+    fn build_sim_with_options(
+        &self,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+        options: Sim3dOptions,
+    ) -> ClothSimSession {
+        let mut pieces = Vec::with_capacity(self.evaluated.len());
+        let mut layers = Vec::with_capacity(self.evaluated.len());
+        for (ei, ep) in self.evaluated.iter().enumerate() {
+            let ci = self.piece_component.get(ei).copied().unwrap_or(0);
+            let mut p = ep.piece.clone();
+            p.fabric_role = garment_role(ci, &p.fabric_role);
+            pieces.push(p);
+            layers.push(self.project.components.get(ci).map(|c| c.layer).unwrap_or(0));
+        }
+        ClothSimSession::start_dressing_with_options(
+            &pieces,
+            &layers,
+            &self.stitching,
+            &self.project.measurements,
+            &MaterialSet::from_project(&self.project),
+            pose,
+            body_form,
+            options,
+        )
     }
 
     fn rebuild_render_buffers(&mut self) {
@@ -2147,4 +2382,128 @@ fn now_ms() -> f64 {
 #[cfg(not(target_arch = "wasm32"))]
 fn now_ms() -> f64 {
     0.0
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+
+    fn all_op_ids(s: &ModelistSession) -> Vec<Uuid> {
+        s.project.comp().ops.iter().map(|o| o.id()).collect()
+    }
+
+    fn assert_unique(ids: &[Uuid]) {
+        let set: HashSet<_> = ids.iter().collect();
+        assert_eq!(set.len(), ids.len(), "duplicate IDs: {ids:?}");
+    }
+
+    #[test]
+    fn op_ids_stay_unique_after_reopening_a_file() {
+        let mut a = ModelistSession::new("boxy_tee");
+        let pid = a.evaluated[0].piece.id.to_string();
+        for i in 0..4 {
+            a.add_notch(&pid, 0, 0.2 + 0.1 * i as f64, "v", 1, 6.0);
+        }
+        let json = a.serialize_project_json();
+
+        // A fresh session restarts its counter at 1, as the browser does after opening a file.
+        let mut b = ModelistSession::new("boxy_tee");
+        b.load_project_json(&json).unwrap();
+        let pid_b = b.evaluated[0].piece.id.to_string();
+        for i in 0..4 {
+            b.add_notch(&pid_b, 1, 0.2 + 0.1 * i as f64, "v", 1, 6.0);
+        }
+        assert_eq!(b.project.comp().ops.len(), 8);
+        assert_unique(&all_op_ids(&b));
+    }
+
+    #[test]
+    fn duplicated_pieces_never_reuse_a_piece_id() {
+        let mut a = ModelistSession::new("boxy_tee");
+        let pid = a.evaluated[0].piece.id.to_string();
+        a.duplicate_piece(&pid);
+        let json = a.serialize_project_json();
+        let mut b = ModelistSession::new("boxy_tee");
+        b.load_project_json(&json).unwrap();
+        b.duplicate_piece(&pid);
+        let ids: Vec<Uuid> = b.evaluated.iter().map(|e| e.piece.id).collect();
+        assert_unique(&ids);
+    }
+
+    #[test]
+    fn importing_the_same_dxf_twice_keeps_ids_unique() {
+        let mut s = ModelistSession::new("boxy_tee");
+        let dxf = s.export_dxf_aama();
+        let before = s.evaluated.len();
+        s.import_dxf_aama(&dxf).unwrap();
+        s.import_dxf_aama(&dxf).unwrap();
+        assert!(s.evaluated.len() > before);
+        let ids: Vec<Uuid> = s.evaluated.iter().map(|e| e.piece.id).collect();
+        assert_unique(&ids);
+        let edges: Vec<Uuid> = s
+            .evaluated
+            .iter()
+            .flat_map(|e| e.piece.seam_loop.edges.iter().map(|x| x.id))
+            .collect();
+        assert_unique(&edges);
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+
+    #[test]
+    fn a_second_garment_drafts_beside_the_first_and_keeps_its_own_history() {
+        let mut s = ModelistSession::new("boxy_tee");
+        let first_count = s.evaluated.len();
+        let first_max_x = s.evaluated.iter().flat_map(|e| e.seam_polyline.iter().map(|p| p.x)).fold(f64::MIN, f64::max);
+        let id = s.add_component("wide_pleat_trouser", "");
+        assert_eq!(s.project.components.len(), 2);
+        assert_eq!(s.project.comp().id.to_string(), id, "the new garment is active");
+        assert_eq!(s.project.comp().layer, 1, "it goes on top in the 3D fit");
+        assert!(s.evaluated.len() > first_count);
+        let second_min_x = s
+            .evaluated
+            .iter()
+            .zip(&s.piece_component)
+            .filter(|(_, &c)| c == 1)
+            .flat_map(|(e, _)| e.seam_polyline.iter().map(|p| p.x))
+            .fold(f64::MAX, f64::min);
+        assert!(second_min_x > first_max_x, "drafted to the right of the first garment");
+
+        // A notch on a trouser piece lands in the trouser timeline only.
+        let trouser_piece = s.evaluated.iter().zip(&s.piece_component).find(|(_, &c)| c == 1).unwrap().0.piece.id;
+        s.set_active_component(&s.project.components[0].id.to_string());
+        s.add_notch(&trouser_piece.to_string(), 0, 0.5, "v", 1, 6.0);
+        assert_eq!(s.project.components[0].ops.len(), 0);
+        assert_eq!(s.project.components[1].ops.len(), 1);
+        assert_eq!(s.project.active_component, 1, "editing a piece activates its garment");
+
+        // Saving and reopening keeps both garments; undo removes the second one.
+        let json = s.serialize_project_json();
+        let mut b = ModelistSession::new("bodice_sleeve");
+        b.load_project_json(&json).unwrap();
+        assert_eq!(b.project.components.len(), 2);
+        assert_eq!(b.evaluated.len(), s.evaluated.len());
+        s.undo();
+        s.undo();
+        assert_eq!(s.project.components.len(), 1);
+    }
+
+    #[test]
+    fn hiding_a_garment_in_3d_keeps_it_worn() {
+        let mut s = ModelistSession::new("boxy_tee");
+        let outer = s.add_component("boxy_tee", "Outer tee");
+        s.init_sim3d("a_pose", "female");
+        let all = s.sim3d.as_ref().unwrap().triangle_indices().len();
+        s.set_component_visible_3d(&outer, false);
+        let shown = s.sim3d.as_ref().unwrap().triangle_indices_shown(
+            &(0..s.evaluated.len()).map(|ei| s.project.components[s.piece_component[ei]].visible_3d).collect::<Vec<_>>(),
+        );
+        assert!(shown.len() < all && !shown.is_empty());
+        // Hidden everywhere: its pieces leave the canvas and the 3D fit.
+        s.set_component_visible(&outer, false);
+        assert!(s.evaluated.iter().zip(&s.piece_component).all(|(e, &c)| e.piece.visible == (c == 0)));
+    }
 }

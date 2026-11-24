@@ -5,7 +5,7 @@
 import { closeDocument, getActiveDocumentId, kernel, openDocument, switchDocument } from './kernelClient';
 import type { UiSnapshot } from './types';
 import { openTextFileFromDisk, saveProjectToDisk } from './localFiles';
-import { t } from './i18n';
+import { t, tCatalog } from './i18n';
 import { useStudioStore } from '../store/studioStore';
 
 /** Modifier-key label for shortcut hints ("⌘" on macOS, "Ctrl+" elsewhere). */
@@ -41,6 +41,24 @@ function showDocument(snapshot: UiSnapshot, addId?: string) {
   });
   st.setDocuments(docs, activeId);
   st.setSnapshot(snapshot);
+  st.requestFitView();
+}
+
+/** Adds a garment from the library to the current document, on top of the others. */
+export function addGarment(templateId: string): void {
+  const st = useStudioStore.getState();
+  // The garment starts with the template name in the UI language (then it is user data).
+  const snap = kernel.addComponent(templateId, tCatalog('template', `${templateId}.name`, ''));
+  const added = snap.components.find((c) => c.id === snap.active_component_id);
+  st.setSnapshot(snap);
+  if (added) st.setStatusMessage(t('status.garmentAdded', { name: added.name, layer: added.layer }));
+  st.requestFitView();
+}
+
+export function removeGarment(componentId: string): void {
+  const st = useStudioStore.getState();
+  st.setSnapshot(kernel.removeComponent(componentId));
+  st.setStatusMessage(t('status.garmentRemoved'));
   st.requestFitView();
 }
 

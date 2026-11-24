@@ -9,6 +9,7 @@ import { BottomBar } from './BottomBar';
 import { ExportModal } from './ExportModal';
 import { FloatingPanel } from './FloatingPanel';
 import { LeftPanel } from './LeftPanel';
+import { GarmentPicker } from './templateMenu';
 import { DataPanel } from './DataPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import { SettingsModal } from './SettingsModal';
@@ -410,6 +411,7 @@ export const StudioRoot: React.FC = () => {
 
         <PropertiesPanel top={rightOver2d ? RULER_PX + 8 : 8} />
         <DataPanel />
+        <GarmentPicker />
       </main>
 
       <BottomBar />

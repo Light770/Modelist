@@ -1725,6 +1725,84 @@ impl ParametricOp {
     }
 }
 
+/// Moves a group of pieces (and the seams between them) into a fresh ID namespace.
+///
+/// Every entity ID owned by `pieces` (piece, edges, cutout edges, darts, notches, drill holes,
+/// internal lines) and every binding / interface ID in `bindings` becomes
+/// `det_id("{ns}:{old}")`, so the result is deterministic for a given `ns`. Edge references and
+/// dart/notch edge links are rewritten when they point inside the group; references to pieces
+/// outside the group are left untouched. Used when inserting content whose deterministic IDs
+/// may already exist in the project (re-importing a file, inserting a template twice).
+/// Returns the old -> new map.
+pub fn remap_entity_ids(
+    pieces: &mut [PatternPiece],
+    bindings: &mut [SeamBinding],
+    ns: &str,
+) -> HashMap<Uuid, Uuid> {
+    let mut map: HashMap<Uuid, Uuid> = HashMap::new();
+    let fresh = |map: &mut HashMap<Uuid, Uuid>, old: Uuid| -> Uuid {
+        *map.entry(old)
+            .or_insert_with(|| det_id(&format!("{ns}:{old}")))
+    };
+    for p in pieces.iter_mut() {
+        p.id = fresh(&mut map, p.id);
+        for e in p.seam_loop.edges.iter_mut() {
+            e.id = fresh(&mut map, e.id);
+        }
+        for c in p.cutouts.iter_mut() {
+            for e in c.edges.iter_mut() {
+                e.id = fresh(&mut map, e.id);
+            }
+        }
+        for d in p.darts.iter_mut() {
+            d.id = fresh(&mut map, d.id);
+        }
+        for n in p.notches.iter_mut() {
+            n.id = fresh(&mut map, n.id);
+        }
+        for h in p.drill_holes.iter_mut() {
+            h.id = fresh(&mut map, h.id);
+        }
+        for l in p.internal_lines.iter_mut() {
+            l.id = fresh(&mut map, l.id);
+        }
+    }
+    // Second pass: links inside the group (edge ids are all mapped by now).
+    let relink = |id: &mut Uuid| {
+        if let Some(n) = map.get(id) {
+            *id = *n;
+        }
+    };
+    for p in pieces.iter_mut() {
+        for d in p.darts.iter_mut() {
+            if let Some(e) = d.edge_id.as_mut() {
+                relink(e);
+            }
+        }
+        for n in p.notches.iter_mut() {
+            if let Some(e) = n.edge_id.as_mut() {
+                relink(e);
+            }
+        }
+    }
+    let mut out = map.clone();
+    for b in bindings.iter_mut() {
+        let nb = det_id(&format!("{ns}:{}", b.id));
+        out.insert(b.id, nb);
+        b.id = nb;
+        for iface in [&mut b.interface_a, &mut b.interface_b] {
+            let ni = det_id(&format!("{ns}:{}", iface.id));
+            out.insert(iface.id, ni);
+            iface.id = ni;
+            for er in iface.edges.iter_mut() {
+                relink(&mut er.piece_id);
+                relink(&mut er.edge_id);
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SizeTable {
     pub sizes: Vec<String>,
@@ -1785,12 +1863,26 @@ impl SizeTable {
     }
 }
 
+/// Version of the `.modelist` project schema written by this build. Files without the field are
+/// version 0 (one garment per file) and are migrated on load.
+pub const PROJECT_FORMAT_VERSION: u32 = 1;
+
+fn default_origin() -> Point2 {
+    Point2::new(0.0, 0.0)
+}
+
+/// One garment of a project (a tee, a vest, trousers): its template, ease, formulas, fabrics,
+/// construction history and pieces. Every component of a file is drafted on the same body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PatternProject {
+pub struct GarmentComponent {
+    /// Written once when the component is created and saved with it.
     pub id: Uuid,
     pub name: String,
     pub template_id: String,
-    pub measurements: BodyMeasurements,
+    /// Namespace for the IDs its template drafts (empty for the first component of a file and
+    /// for migrated files, so their IDs stay as they were). See [`remap_entity_ids`].
+    #[serde(default)]
+    pub id_ns: String,
     pub ease: EaseTable,
     #[serde(default)]
     pub fabric: FabricSpec,
@@ -1798,18 +1890,29 @@ pub struct PatternProject {
     #[serde(default)]
     pub role_fabrics: Vec<RoleFabric>,
     pub variables: Vec<ParametricVar>,
-    pub size_table: SizeTable,
-    pub grade_mode: GradeMode,
-    pub stack_anchor: StackAnchor,
     pub ops: Vec<ParametricOp>,
     pub custom_pieces: Vec<PatternPiece>,
     #[serde(default)]
     pub suppressed_ops: Vec<Uuid>,
     #[serde(default)]
     pub rollback_index: Option<usize>,
+    /// Garment layer in the 3D fit (0 = next to the body). Tucking a tee into trousers is
+    /// giving the tee the lower layer.
+    #[serde(default)]
+    pub layer: u8,
+    /// Where its drafted pieces sit on the 2D canvas, mm.
+    #[serde(default = "default_origin")]
+    pub offset_2d: Point2,
+    /// Shown on the 2D canvas and in exports.
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    /// Shown in the 3D fit. A hidden garment is still worn (the others drape over it), it is
+    /// only not drawn, so hiding an outer layer reveals what is under it.
+    #[serde(default = "default_true")]
+    pub visible_3d: bool,
 }
 
-impl PatternProject {
+impl GarmentComponent {
     /// Fabric used for a piece with the given `fabric_role` (falls back to the shell fabric).
     pub fn fabric_for_role(&self, role: &str) -> &FabricSpec {
         let key = fabric_role_key(role);
@@ -1840,7 +1943,7 @@ impl PatternProject {
         }
     }
 
-    /// Migrates and clamps every fabric in the project (call after loading a file).
+    /// Migrates and clamps every fabric of the component (call after loading a file).
     pub fn normalize_fabrics(&mut self) {
         self.fabric = self.fabric.clone().normalized();
         for rf in &mut self.role_fabrics {
@@ -1895,6 +1998,208 @@ impl PatternProject {
             .filter(|op| !self.suppressed_ops.contains(&op.id()))
             .cloned()
             .collect()
+    }
+
+    /// IDs this component stores: ops, bindings added by ops, custom pieces and their edges.
+    pub fn stored_ids(&self) -> std::collections::HashSet<Uuid> {
+        let mut ids = std::collections::HashSet::new();
+        ids.insert(self.id);
+        for op in &self.ops {
+            ids.insert(op.id());
+            if let ParametricOp::AddSeamBinding { binding, .. }
+            | ParametricOp::ReplaceSeamBinding { binding, .. } = op
+            {
+                ids.insert(binding.id);
+            }
+        }
+        for p in &self.custom_pieces {
+            ids.insert(p.id);
+            ids.extend(p.seam_loop.edges.iter().map(|e| e.id));
+        }
+        ids
+    }
+}
+
+/// A `.modelist` project: one body, one size run, and the garments (components) worn on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatternProject {
+    #[serde(default)]
+    pub format_version: u32,
+    pub id: Uuid,
+    pub name: String,
+    pub measurements: BodyMeasurements,
+    pub size_table: SizeTable,
+    pub grade_mode: GradeMode,
+    pub stack_anchor: StackAnchor,
+    /// Never empty.
+    pub components: Vec<GarmentComponent>,
+    /// The component edits, the parameters page and the timeline apply to.
+    #[serde(default)]
+    pub active_component: usize,
+}
+
+/// Version 0 file layout: a single garment stored on the project itself.
+#[derive(Deserialize)]
+struct ProjectV0 {
+    id: Uuid,
+    name: String,
+    template_id: String,
+    measurements: BodyMeasurements,
+    ease: EaseTable,
+    #[serde(default)]
+    fabric: FabricSpec,
+    #[serde(default)]
+    role_fabrics: Vec<RoleFabric>,
+    variables: Vec<ParametricVar>,
+    size_table: SizeTable,
+    grade_mode: GradeMode,
+    stack_anchor: StackAnchor,
+    ops: Vec<ParametricOp>,
+    custom_pieces: Vec<PatternPiece>,
+    #[serde(default)]
+    suppressed_ops: Vec<Uuid>,
+    #[serde(default)]
+    rollback_index: Option<usize>,
+}
+
+impl PatternProject {
+    /// Reads a project file of any version (version 0 becomes a single component that keeps
+    /// every ID, so its timeline, seams and grade rules still match).
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let version = value.get("format_version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        if version > PROJECT_FORMAT_VERSION {
+            return Err(format!(
+                "this file was written by a newer Modelist (format {version}, this build reads up to {PROJECT_FORMAT_VERSION})"
+            ));
+        }
+        let mut project = if value.get("components").is_some() {
+            serde_json::from_value::<PatternProject>(value).map_err(|e| e.to_string())?
+        } else {
+            let v0: ProjectV0 = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            PatternProject {
+                format_version: PROJECT_FORMAT_VERSION,
+                id: v0.id,
+                name: v0.name.clone(),
+                measurements: v0.measurements,
+                size_table: v0.size_table,
+                grade_mode: v0.grade_mode,
+                stack_anchor: v0.stack_anchor,
+                components: vec![GarmentComponent {
+                    id: det_id(&format!("component:{}:0", v0.id)),
+                    name: v0.name,
+                    template_id: v0.template_id,
+                    id_ns: String::new(),
+                    ease: v0.ease,
+                    fabric: v0.fabric,
+                    role_fabrics: v0.role_fabrics,
+                    variables: v0.variables,
+                    ops: v0.ops,
+                    custom_pieces: v0.custom_pieces,
+                    suppressed_ops: v0.suppressed_ops,
+                    rollback_index: v0.rollback_index,
+                    layer: 0,
+                    offset_2d: default_origin(),
+                    visible: true,
+                    visible_3d: true,
+                }],
+                active_component: 0,
+            }
+        };
+        if project.components.is_empty() {
+            return Err("the project has no garment".into());
+        }
+        project.format_version = PROJECT_FORMAT_VERSION;
+        project.active_component = project.active_component.min(project.components.len() - 1);
+        Ok(project)
+    }
+
+    pub fn comp(&self) -> &GarmentComponent {
+        &self.components[self.active_component.min(self.components.len() - 1)]
+    }
+
+    pub fn comp_mut(&mut self) -> &mut GarmentComponent {
+        let i = self.active_component.min(self.components.len() - 1);
+        &mut self.components[i]
+    }
+
+    pub fn component_index(&self, id: Uuid) -> Option<usize> {
+        self.components.iter().position(|c| c.id == id)
+    }
+
+    /// Fabric of a role in the active component.
+    pub fn fabric_for_role(&self, role: &str) -> &FabricSpec {
+        self.comp().fabric_for_role(role)
+    }
+
+    pub fn set_role_fabric(&mut self, role: &str, fabric: Option<FabricSpec>) {
+        self.comp_mut().set_role_fabric(role, fabric);
+    }
+
+    /// Migrates and clamps every fabric of every component (call after loading a file).
+    pub fn normalize_fabrics(&mut self) {
+        for c in &mut self.components {
+            c.normalize_fabrics();
+        }
+    }
+
+    /// Mirrors each component's shell fabric into its `fabric_*` variables.
+    pub fn sync_fabric_variables(&mut self) -> bool {
+        let mut changed = false;
+        for c in &mut self.components {
+            changed |= c.sync_fabric_variables();
+        }
+        changed
+    }
+
+    pub fn effective_rollback(&self) -> usize {
+        self.comp().effective_rollback()
+    }
+
+    pub fn is_op_suppressed(&self, id: Uuid) -> bool {
+        self.comp().is_op_suppressed(id)
+    }
+
+    /// Every entity ID the project stores in any component. Template-drafted IDs are not stored;
+    /// callers that need them add the evaluated pieces themselves.
+    pub fn stored_ids(&self) -> std::collections::HashSet<Uuid> {
+        let mut ids = std::collections::HashSet::new();
+        for c in &self.components {
+            ids.extend(c.stored_ids());
+        }
+        ids
+    }
+
+    /// Active (not rolled back, not suppressed) ops of the active component.
+    pub fn active_ops(&self) -> Vec<ParametricOp> {
+        self.comp().active_ops()
+    }
+}
+
+/// Shifts every point of a piece by `(dx, dy)` mm.
+pub fn translate_piece(p: &mut PatternPiece, dx: f64, dy: f64) {
+    let mv = |q: &mut Point2| {
+        q.x += dx;
+        q.y += dy;
+    };
+    for loop_ in std::iter::once(&mut p.seam_loop).chain(p.cutouts.iter_mut()) {
+        for e in &mut loop_.edges {
+            mv(&mut e.start);
+            e.segment.transform(|q| Point2::new(q.x + dx, q.y + dy));
+        }
+    }
+    mv(&mut p.grainline.start);
+    mv(&mut p.grainline.end);
+    for d in &mut p.darts {
+        mv(&mut d.apex);
+    }
+    for h in &mut p.drill_holes {
+        mv(&mut h.pos);
+    }
+    for l in &mut p.internal_lines {
+        for q in &mut l.pts {
+            mv(q);
+        }
     }
 }
 

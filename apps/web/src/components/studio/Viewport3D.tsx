@@ -313,6 +313,8 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   });
   const keysRef = useRef<Set<string>>(new Set());
   const playingRef = useRef(true);
+  /** True while garments are still being put on one layer at a time (steps even when paused). */
+  const dressingRef = useRef(false);
   const lastVerRef = useRef(-1);
 
   const pose = useStudioStore((s) => s.sim3dPose);
@@ -632,14 +634,18 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       if (ver !== lastVerRef.current) {
         lastVerRef.current = ver;
         const syncStats = kernel.stepSim3d(1);
+        dressingRef.current = !!syncStats?.dressing_layers;
         uploadAll(true);
         if (syncStats) {
           statsRef.current = syncStats;
           useStudioStore.getState().setSim3dTelemetry(syncStats);
         }
-      } else if (playingRef.current) {
+      } else if (playingRef.current || dressingRef.current) {
         const nextStats = kernel.stepSim3d(1);
-        uploadAll(false);
+        // A new garment layer joins the scene while the outfit is being dressed: new topology.
+        const topologyChanged = !!nextStats && nextStats.vertex_count !== statsRef.current?.vertex_count;
+        dressingRef.current = !!nextStats?.dressing_layers;
+        uploadAll(topologyChanged);
         if (nextStats) statsRef.current = nextStats;
         if (nextStats && frameTick % 12 === 0) {
           const quality = frameTick % 96 === 0 ? kernel.getSim3dQuality() : undefined;

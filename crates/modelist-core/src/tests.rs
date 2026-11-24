@@ -9,9 +9,9 @@ mod tests {
     };
     use crate::model::{
         det_id, polygon_signed_area, ArrangementZone, BodyMeasurements, ClosedPolyCurve,
-        CornerRule, CurveSegment, EaseSpec, EaseTable, FabricSpec, GradeDelta, GradeMode,
+        CornerRule, CurveSegment, EaseSpec, EaseTable, FabricSpec, GradeDelta,
         HingeMode, ParametricOp, ParametricVar, PatternPiece, PatternProject, Point2, PolyEdge,
-        SeamDriver, SizeTable, StackAnchor,
+        SeamDriver,
     };
     use crate::nesting::{compute_marker_plan, polygons_collide, MarkerConfig, SizeBundleEntry};
     use crate::offset::{compute_variable_sa_cutline, evaluate_piece, has_self_intersection};
@@ -23,6 +23,22 @@ mod tests {
     use crate::snap::SpatialSnapIndex;
     use proptest::prelude::*;
     use std::collections::HashMap;
+
+    /// A one-garment project on the given body, ease and formulas.
+    fn test_project(
+        tmpl: &str,
+        m: BodyMeasurements,
+        e: EaseTable,
+        vars: Vec<ParametricVar>,
+    ) -> PatternProject {
+        let mut p = crate::library::new_project(tmpl);
+        p.measurements = m;
+        p.components[0].ease = e;
+        p.components[0].fabric = FabricSpec::default();
+        p.components[0].role_fabrics = vec![];
+        p.components[0].variables = vars;
+        p
+    }
 
     fn square_piece(sa: f64, rule: CornerRule) -> PatternPiece {
         let p0 = Point2::new(0.0, 0.0);
@@ -298,23 +314,7 @@ mod tests {
         assert_eq!(ghost_pid, det_id("piece:sleeve"));
         assert!(frame.walked_a_mm > 0.0 && frame.walked_b_mm > 0.0);
 
-        let proj = PatternProject {
-            id: det_id("proj:test"),
-            name: "Test Bodice".into(),
-            template_id: "bodice_sleeve".into(),
-            measurements: m,
-            ease: e,
-            fabric: FabricSpec::default(),
-            role_fabrics: vec![],
-            variables: vars,
-            size_table: SizeTable::default(),
-            grade_mode: GradeMode::ParametricMtm,
-            stack_anchor: StackAnchor::GrainlineMidpoint,
-            ops: vec![],
-            custom_pieces: vec![],
-            suppressed_ops: vec![],
-            rollback_index: None,
-        };
+        let proj = test_project("bodice_sleeve", m, e, vars);
         let qa = compute_cross_size_qa(&proj);
         assert_eq!(qa.len(), 3);
         assert_eq!(qa[0].cells.len(), 6);
@@ -330,23 +330,7 @@ mod tests {
         let m = BodyMeasurements::default();
         let e = EaseTable::default();
         let vars = build_default_variables("bodice_sleeve");
-        let proj = PatternProject {
-            id: det_id("proj:nest"),
-            name: "Nest Test".into(),
-            template_id: "bodice_sleeve".into(),
-            measurements: m,
-            ease: e,
-            fabric: FabricSpec::default(),
-            role_fabrics: vec![],
-            variables: vars,
-            size_table: SizeTable::default(),
-            grade_mode: GradeMode::ParametricMtm,
-            stack_anchor: StackAnchor::GrainlineMidpoint,
-            ops: vec![],
-            custom_pieces: vec![],
-            suppressed_ops: vec![],
-            rollback_index: None,
-        };
+        let proj = test_project("bodice_sleeve", m, e, vars);
         let cfg = MarkerConfig {
             roll_width_mm: 1450.0,
             kerf_mm: 4.0,
@@ -579,19 +563,8 @@ mod tests {
         let op1_id = det_id("op:tl:1");
         let op2_id = det_id("op:tl:2");
 
-        let mut proj = PatternProject {
-            id: det_id("proj:tl"),
-            name: "Timeline Test".into(),
-            template_id: "bodice_sleeve".into(),
-            measurements: m.clone(),
-            ease: e.clone(),
-            fabric: FabricSpec::default(),
-            role_fabrics: vec![],
-            variables: vars.clone(),
-            size_table: SizeTable::default(),
-            grade_mode: GradeMode::ParametricMtm,
-            stack_anchor: StackAnchor::GrainlineMidpoint,
-            ops: vec![
+        let mut proj = test_project("bodice_sleeve", m.clone(), e.clone(), vars.clone());
+        proj.components[0].ops = vec![
                 ParametricOp::SetSeamAllowance {
                     id: op1_id,
                     piece_id: fb_id,
@@ -609,34 +582,32 @@ mod tests {
                     label_a: "Yoke".into(),
                     label_b: "Lower".into(),
                 },
-            ],
-            custom_pieces: vec![],
-            suppressed_ops: vec![op1_id],
-            rollback_index: Some(1),
-        };
+            ];
+        proj.components[0].suppressed_ops = vec![op1_id];
+        proj.components[0].rollback_index = Some(1);
 
         assert_eq!(proj.active_ops().len(), 0);
-        proj.suppressed_ops.clear();
+        proj.comp_mut().suppressed_ops.clear();
         assert_eq!(proj.active_ops().len(), 1);
         let (pieces_rb1, _, _, _) = build_template_pieces(
-            &proj.template_id,
+            &proj.comp().template_id,
             &m,
             &e,
             &vars,
             &proj.active_ops(),
-            &proj.custom_pieces,
+            &proj.comp().custom_pieces,
         );
         assert_eq!(pieces_rb1.len(), 3, "Rolled back before SplitStyleLine -> 3 pieces");
         assert!((pieces_rb1[0].seam_loop.edges[1].sa_width_mm - 24.0).abs() < 1e-6);
 
-        proj.rollback_index = None;
+        proj.comp_mut().rollback_index = None;
         let (pieces_full, _, _, _) = build_template_pieces(
-            &proj.template_id,
+            &proj.comp().template_id,
             &m,
             &e,
             &vars,
             &proj.active_ops(),
-            &proj.custom_pieces,
+            &proj.comp().custom_pieces,
         );
         assert_eq!(pieces_full.len(), 4, "Rolled to end -> 4 pieces after split");
     }
@@ -765,24 +736,9 @@ mod fabric_tests {
     #[test]
     fn fabric_values_are_mirrored_into_formula_variables() {
         use crate::blocks::build_default_variables;
-        use crate::model::{BodyMeasurements, EaseTable, GradeMode, PatternProject, SizeTable, StackAnchor};
-        let mut p = PatternProject {
-            id: crate::model::det_id("project:test"),
-            name: "t".into(),
-            template_id: "boxy_tee".into(),
-            measurements: BodyMeasurements::default(),
-            ease: EaseTable::default(),
-            fabric: FabricSpec::from_preset("jersey_knit"),
-            role_fabrics: vec![],
-            variables: build_default_variables("boxy_tee"),
-            size_table: SizeTable::default(),
-            grade_mode: GradeMode::ParametricMtm,
-            stack_anchor: StackAnchor::GrainlineMidpoint,
-            ops: vec![],
-            custom_pieces: vec![],
-            suppressed_ops: vec![],
-            rollback_index: None,
-        };
+        let mut p = crate::library::new_component("boxy_tee", 0, crate::model::Point2::ZERO);
+        p.fabric = FabricSpec::from_preset("jersey_knit");
+        p.variables = build_default_variables("boxy_tee");
         assert!(p.sync_fabric_variables());
         assert!(!p.sync_fabric_variables(), "second sync is a no-op");
         let stretch = p.variables.iter().find(|v| v.name == "fabric_stretch_weft").unwrap();
@@ -797,5 +753,134 @@ mod fabric_tests {
         assert_eq!(p.fabric_for_role("Shell (interfaced)").id, "cotton_poplin");
         p.set_role_fabric("rib", None);
         assert_eq!(p.fabric_for_role("Rib").id, "cotton_poplin");
+    }
+
+    #[test]
+    fn remap_entity_ids_is_deterministic_and_keeps_links() {
+        use crate::blocks::{build_default_variables, build_template_pieces};
+        use crate::model::{det_id, BodyMeasurements, EaseTable};
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let vars = build_default_variables("boxy_tee");
+        let (mut pieces, stitching, _, _) =
+            build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        let mut bindings = stitching.bindings.clone();
+        let orig_pieces = pieces.clone();
+        let orig_bindings = bindings.clone();
+        let map = crate::model::remap_entity_ids(&mut pieces, &mut bindings, "component:a");
+
+        // Every owned ID changed, deterministically.
+        for (o, n) in orig_pieces.iter().zip(&pieces) {
+            assert_ne!(o.id, n.id);
+            assert_eq!(map[&o.id], n.id);
+            assert_eq!(n.id, det_id(&format!("component:a:{}", o.id)));
+            for (oe, ne) in o.seam_loop.edges.iter().zip(&n.seam_loop.edges) {
+                assert_eq!(map[&oe.id], ne.id);
+            }
+        }
+        // Seams still point at real pieces and edges of the remapped group.
+        for b in &bindings {
+            for er in b.interface_a.edges.iter().chain(&b.interface_b.edges) {
+                let p = pieces.iter().find(|p| p.id == er.piece_id).expect("piece link");
+                assert!(p.seam_loop.edge_index_by_id(er.edge_id).is_some(), "edge link");
+            }
+        }
+        assert_eq!(bindings.len(), orig_bindings.len());
+        // Notch and dart edge links follow their edges.
+        for p in &pieces {
+            for n in &p.notches {
+                if let Some(eid) = n.edge_id {
+                    assert!(p.seam_loop.edge_index_by_id(eid).is_some());
+                }
+            }
+        }
+        // Same namespace -> same IDs; another namespace -> disjoint IDs.
+        let (mut again, _, _, _) = build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        crate::model::remap_entity_ids(&mut again, &mut [], "component:a");
+        assert_eq!(again[0].id, pieces[0].id);
+        let (mut other, _, _, _) = build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        crate::model::remap_entity_ids(&mut other, &mut [], "component:b");
+        assert!(other.iter().all(|o| pieces.iter().all(|p| p.id != o.id)));
+    }
+
+    #[test]
+    fn version_0_files_become_one_component_with_the_same_ids() {
+        use crate::model::{det_id, PatternProject};
+        // A file as written before components existed (one garment on the project).
+        let mut legacy = serde_json::to_value(crate::library::new_project("boxy_tee")).unwrap();
+        let comp = legacy["components"][0].clone();
+        let obj = legacy.as_object_mut().unwrap();
+        obj.remove("components");
+        obj.remove("active_component");
+        obj.remove("format_version");
+        for key in ["template_id", "ease", "fabric", "role_fabrics", "variables", "ops", "custom_pieces", "suppressed_ops", "rollback_index"] {
+            obj.insert(key.into(), comp[key].clone());
+        }
+        let op_id = det_id("op:legacy:1");
+        let front = det_id("boxy_tee:piece:front");
+        obj.insert(
+            "ops".into(),
+            serde_json::json!([{ "op": "set_seam_allowance", "id": op_id, "piece_id": front, "edge_idx": 0, "width_mm": 22.0, "corner_rule": { "kind": "miter", "limit": 2.5 } }]),
+        );
+        let p = PatternProject::from_json(&legacy.to_string()).expect("v0 loads");
+        assert_eq!(p.format_version, crate::model::PROJECT_FORMAT_VERSION);
+        assert_eq!(p.components.len(), 1);
+        assert_eq!(p.comp().template_id, "boxy_tee");
+        assert_eq!(p.comp().ops.len(), 1);
+        let draft = crate::blocks::build_project_pieces(&p, &p.measurements);
+        let fp = draft.pieces.iter().find(|x| x.id == front).expect("IDs kept without prefix");
+        assert!((fp.seam_loop.edges[0].sa_width_mm - 22.0).abs() < 1e-9, "old op still applies");
+        // And a version-1 file round-trips.
+        let again = PatternProject::from_json(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(again, p);
+        // Files from a newer build are refused rather than misread.
+        let mut newer = serde_json::to_value(&p).unwrap();
+        newer["format_version"] = serde_json::json!(99);
+        assert!(PatternProject::from_json(&newer.to_string()).is_err());
+    }
+
+    #[test]
+    fn the_same_template_can_be_worn_twice() {
+        use crate::model::{det_id, CornerRule, ParametricOp, Point2};
+        let mut p = crate::library::new_project("boxy_tee");
+        let second = crate::library::new_component("boxy_tee", 1, Point2::new(1500.0, 0.0));
+        p.components.push(second);
+        let draft = crate::blocks::build_project_pieces(&p, &p.measurements);
+        let n = draft.pieces.len();
+        assert_eq!(draft.piece_component.iter().filter(|&&c| c == 0).count(), n / 2);
+        let ids: std::collections::HashSet<_> = draft.pieces.iter().map(|x| x.id).collect();
+        assert_eq!(ids.len(), n, "no piece ID shared between the two tees");
+        let edges: std::collections::HashSet<_> =
+            draft.pieces.iter().flat_map(|x| x.seam_loop.edges.iter().map(|e| e.id)).collect();
+        assert_eq!(edges.len(), draft.pieces.iter().map(|x| x.seam_loop.edges.len()).sum::<usize>());
+        // The second tee sits 1500 mm to the right and keeps its own seams.
+        let x0 = |c: usize| {
+            draft.pieces.iter().zip(&draft.piece_component).filter(|(_, &k)| k == c)
+                .flat_map(|(x, _)| x.seam_loop.edges.iter().map(|e| e.start.x)).fold(f64::INFINITY, f64::min)
+        };
+        assert!((x0(1) - x0(0) - 1500.0).abs() < 1e-6);
+        for b in &draft.stitching.bindings {
+            let owners: std::collections::HashSet<usize> = b.interface_a.edges.iter().chain(&b.interface_b.edges)
+                .map(|er| draft.piece_component[draft.pieces.iter().position(|x| x.id == er.piece_id).expect("seam piece exists")])
+                .collect();
+            assert_eq!(owners.len(), 1, "a seam stays inside its garment");
+        }
+        // Ops recorded on the second tee's (prefixed, shifted) pieces apply to it only.
+        let target = draft.pieces[n / 2].id;
+        p.components[1].ops.push(ParametricOp::SetSeamAllowance {
+            id: det_id("op:second:1"),
+            piece_id: target,
+            edge_idx: 0,
+            width_mm: 31.0,
+            corner_rule: CornerRule::Miter { limit: 2.5 },
+        });
+        let draft2 = crate::blocks::build_project_pieces(&p, &p.measurements);
+        let piece = draft2.pieces.iter().find(|x| x.id == target).unwrap();
+        assert!((piece.seam_loop.edges[0].sa_width_mm - 31.0).abs() < 1e-9);
+        assert!((draft2.pieces[0].seam_loop.edges[0].sa_width_mm - 31.0).abs() > 1e-6);
+        // A hidden garment drafts invisible pieces (not drawn, exported or worn).
+        p.components[1].visible = false;
+        let draft3 = crate::blocks::build_project_pieces(&p, &p.measurements);
+        assert!(draft3.pieces.iter().zip(&draft3.piece_component).all(|(x, &c)| x.visible == (c == 0)));
     }
 }

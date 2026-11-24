@@ -123,6 +123,16 @@ export const RightInspector: React.FC<{ view: PanelPage }> = ({ view }) => {
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden select-none">
       {/* Tab Body */}
       <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-4 text-xs">
+        {snapshot.components.length > 1 && (view === 'params' || view === 'materials' || view === 'piece') && (
+          <div
+            className="px-2 py-1 rounded-[3px] text-[11px] font-medium"
+            style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+          >
+            {t('panel.garmentScope', {
+              name: snapshot.components.find((c) => c.id === snapshot.active_component_id)?.name ?? '',
+            })}
+          </div>
+        )}
         {view === 'params' && (
           <>
             <div>

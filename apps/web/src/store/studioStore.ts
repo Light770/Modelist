@@ -107,6 +107,8 @@ export interface StudioState {
   activeDocId: string;
   /** Project space panel (open documents, templates). */
   dataPanelOpen: boolean;
+  /** Where the "add a garment" template menu is open (the button that opened it), or null. */
+  garmentPicker: DOMRect | null;
   /** Page explicitly opened in the properties panel; null = follow the active tool / selection. */
   panelPage: PanelPage | null;
   /** Context key the user closed the properties panel on; it reappears when the context changes. */
@@ -192,6 +194,7 @@ export interface StudioState {
   setWorkspace: (ws: WorkspaceId) => void;
   setDocuments: (docs: OpenDocument[], activeId: string) => void;
   toggleDataPanel: (open?: boolean) => void;
+  openGarmentPicker: (anchor: DOMRect | null) => void;
   openPanelPage: (page: PanelPage) => void;
   closePanelPage: () => void;
   dismissPanel: (key: string | null) => void;
@@ -316,6 +319,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   documents: [],
   activeDocId: '',
   dataPanelOpen: false,
+  garmentPicker: null,
   panelPage: null,
   panelDismissedKey: null,
   sim3dPlaying: true,
@@ -511,6 +515,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
   setDocuments: (documents, activeDocId) => set({ documents, activeDocId }),
   toggleDataPanel: (open) => set((s) => ({ dataPanelOpen: open ?? !s.dataPanelOpen })),
+  openGarmentPicker: (anchor) => set({ garmentPicker: anchor }),
   openPanelPage: (panelPage) => set({ panelPage, rightPanelOpen: true, rightPanelCollapsed: false }),
   closePanelPage: () => set({ panelPage: null }),
   dismissPanel: (panelDismissedKey) => set({ panelDismissedKey }),

@@ -420,3 +420,63 @@ pub(crate) fn solve_increasing(f: impl Fn(f64) -> f64, target: f64, lo: f64, hi:
     }
     0.5 * (a + b)
 }
+
+/// A new garment component drafted from a catalog template.
+///
+/// `seq` numbers the components ever created in the project (0 for the first one). The first
+/// component keeps the template's own IDs; later ones get an ID namespace so the same template
+/// can be worn twice. `offset` places its pieces on the 2D canvas.
+pub fn new_component(template_id: &str, seq: usize, offset: Point2) -> crate::model::GarmentComponent {
+    use crate::model::{det_id, fabric_role_key, FabricSpec, GarmentComponent, RoleFabric};
+    let tmpl = resolve_template_id(template_id);
+    let info = find_template(tmpl);
+    let fabric = info.map(|t| FabricSpec::from_preset(t.default_fabric)).unwrap_or_default();
+    let role_fabrics = info
+        .map(|t| {
+            t.role_fabrics
+                .iter()
+                .map(|(role, preset)| RoleFabric {
+                    role: fabric_role_key(role),
+                    fabric: FabricSpec::from_preset(preset),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut comp = GarmentComponent {
+        id: det_id(&format!("component:{tmpl}:{seq}")),
+        name: info.map(|t| t.name).unwrap_or("Garment").into(),
+        template_id: tmpl.into(),
+        id_ns: if seq == 0 { String::new() } else { format!("component:{tmpl}:{seq}") },
+        ease: EaseTable::default(),
+        fabric,
+        role_fabrics,
+        variables: crate::blocks::build_default_variables(tmpl),
+        ops: Vec::new(),
+        custom_pieces: Vec::new(),
+        suppressed_ops: Vec::new(),
+        rollback_index: None,
+        layer: 0,
+        offset_2d: offset,
+        visible: true,
+        visible_3d: true,
+    };
+    comp.sync_fabric_variables();
+    comp
+}
+
+/// A new project wearing one garment drafted from a catalog template, on the default body.
+pub fn new_project(template_id: &str) -> crate::model::PatternProject {
+    use crate::model::{det_id, GradeMode, PatternProject, SizeTable, StackAnchor, PROJECT_FORMAT_VERSION};
+    let comp = new_component(template_id, 0, Point2::new(0.0, 0.0));
+    PatternProject {
+        format_version: PROJECT_FORMAT_VERSION,
+        id: det_id(&format!("project:{}", comp.template_id)),
+        name: comp.name.clone(),
+        measurements: BodyMeasurements::default(),
+        size_table: SizeTable::default(),
+        grade_mode: GradeMode::ParametricMtm,
+        stack_anchor: StackAnchor::GrainlineMidpoint,
+        components: vec![comp],
+        active_component: 0,
+    }
+}

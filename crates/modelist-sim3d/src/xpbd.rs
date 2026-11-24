@@ -14,7 +14,9 @@
 //!
 //! Substep-based XPBD ("small steps"): one constraint pass per substep, 12 substeps per frame.
 
-use crate::arrange::{close_darts_for_placement, place_panel, place_trim, ArrangeCtx, TrimAnchor};
+use crate::arrange::{
+    close_darts_for_placement, place_panel, place_trim, ArrangeCtx, InnerShell, TrimAnchor,
+};
 use crate::avatar::{AvatarBodyForm, AvatarMesh, AvatarPose, ParametricAvatar, Vec3};
 use crate::closures::garment_layer_for_role;
 use crate::collide::{push_triangle_off_points, BodyPointGrid};
@@ -51,6 +53,29 @@ pub(crate) const MAX_STEP: f32 = 0.02;
 pub(crate) const MAX_SEPARATION: f32 = 0.0003;
 /// How far a supported waistline may sink below where it was placed, m.
 const WAIST_SLACK: f32 = 0.015;
+/// Clearance an outer garment layer is placed at around the inner layer's cloth, m.
+const LAYER_PLACE_GAP: f32 = 0.010;
+/// Air gap kept between two garment layers on top of their half thicknesses, m.
+const LAYER_AIR_GAP: f32 = 0.0012;
+/// Search radius for the cloth of another layer, m.
+const LAYER_SEARCH: f32 = 0.03;
+/// Deepest a vertex may sit on the wrong side of another layer and still be pushed back, m.
+/// Deeper "hits" are cloth on the far side of a fold or limb, not a crossing.
+const LAYER_MAX_DEPTH: f32 = 0.02;
+/// Least cosine between a vertex normal and another layer's triangle normal for the two to be
+/// stacked. Parts that sit side by side (an inner sleeve against an outer side panel at the
+/// armpit) face each other and are not layered relative to one another.
+const LAYER_MIN_ALIGN: f32 = 0.3;
+/// Largest push a layer contact applies per substep, m: small overlaps left by the placement
+/// resolve over a few frames instead of in one jolt.
+const LAYER_MAX_PUSH: f32 = 0.001;
+/// Longest gentle sewing phase of an outer layer, frames. An outer garment is wrapped around
+/// the bigger inner one, so its seams start wide open; strong sewing only starts once they meet.
+const LAYER_MAX_SEW_FRAMES: u32 = 150;
+/// Seam gap below which an outer layer's gentle sewing phase may end, mm.
+const LAYER_SEWN_GAP_MM: f32 = 12.0;
+/// Frames all layers then settle together.
+const LAYER_COUPLE_FRAMES: u32 = 10;
 
 /// Pins vertex `a` to the point `(1 - w) * b0 + w * b1` of the mating seam.
 #[derive(Debug, Clone)]
@@ -927,6 +952,12 @@ pub struct Sim3dStats {
     pub pin_count: usize,
     pub self_collision_enabled: bool,
     pub wind_speed_mps: f32,
+    /// While garments are still being put on: the layer being dressed (1-based) and how many
+    /// layers there are. Both 0 once dressed.
+    #[serde(default)]
+    pub dressing_layer: usize,
+    #[serde(default)]
+    pub dressing_layers: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -935,6 +966,38 @@ pub(crate) struct Contact {
     pub n: Vec3,
     pub at: Vec3,
     pub dist: f32,
+}
+
+/// What is left to put on when garments are dressed one layer at a time.
+struct DressPlan {
+    pieces: Vec<PatternPiece>,
+    layers: Vec<u8>,
+    stitching: StitchingGraph,
+    measurements: BodyMeasurements,
+    materials: MaterialSet,
+    pose: AvatarPose,
+    body_form: AvatarBodyForm,
+    options: Sim3dOptions,
+    /// Distinct layers, inner first.
+    levels: Vec<u8>,
+    /// Index in `levels` of the layer being put on now.
+    stage: usize,
+    /// Inverse masses to restore when the stage ends (the lower layers are frozen meanwhile).
+    saved_inv_mass: Vec<f32>,
+}
+
+/// One-sided contact between a cloth vertex and a triangle of another garment layer.
+/// `side = +1`: the vertex belongs to an outer layer and must stay outside the triangle;
+/// `side = -1`: it belongs to an inner layer and must stay under it.
+#[derive(Debug, Clone, Copy)]
+struct LayerContact {
+    tri: u32,
+    bary: [f32; 3],
+    side: f32,
+    /// Stacked layers (normals aligned): the lower layer has priority and the side is fixed by
+    /// the layer order. Otherwise the parts sit side by side and simply keep apart on the side
+    /// they are on now, both giving way.
+    stacked: bool,
 }
 
 pub(crate) struct PanelRange {
@@ -979,6 +1042,23 @@ pub struct ClothSimSession {
     max_motion_mm_s: f32,
     min_edge_mm: f32,
     max_edge_mm: f32,
+    /// Garment layer of each vertex (0 = closest to the body).
+    vert_layer: Vec<u8>,
+    /// Index (in the `pieces` the session was built from) of each vertex's piece.
+    vert_piece: Vec<u32>,
+    /// Distinct layers present, ascending. More than one turns on layer contacts.
+    layers: Vec<u8>,
+    vert_thickness: Vec<f32>,
+    /// Per vertex: the nearest triangle of a lower layer and of a higher layer, refreshed every
+    /// frame.
+    layer_contacts: Vec<[Option<LayerContact>; 2]>,
+    /// How far each vertex can still move towards the body this substep, m (set by the body
+    /// contact; layer contacts never push cloth further in than this).
+    vert_room: Vec<f32>,
+    /// Frames of gentle sewing before gravity and full seam strength come in.
+    sew_frames: u32,
+    /// Set while garments are still being put on (see [`Self::start_dressing`]).
+    dress: Option<Box<DressPlan>>,
     pub flat_positions: Vec<f32>,
     pub flat_normals: Vec<f32>,
     pub flat_strain_pct: Vec<f32>,
@@ -1034,15 +1114,7 @@ impl ClothSimSession {
         pose: AvatarPose,
         body_form: AvatarBodyForm,
     ) -> Self {
-        Self::new_with_options(
-            pieces,
-            stitching,
-            measurements,
-            materials,
-            pose,
-            body_form,
-            Sim3dOptions::default(),
-        )
+        Self::new_layered(pieces, &[], stitching, measurements, materials, pose, body_form)
     }
 
     pub fn new_with_options(
@@ -1056,6 +1128,8 @@ impl ClothSimSession {
     ) -> Self {
         let mut sim = Self::new_unsettled_with_options(
             pieces,
+            &[],
+            &[],
             stitching,
             measurements,
             materials,
@@ -1067,10 +1141,169 @@ impl ClothSimSession {
         sim
     }
 
+    /// Builds and settles a session where `layers[i]` is the garment layer of `pieces[i]`
+    /// (0 = closest to the body; missing entries are 0).
+    pub fn new_layered(
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        stitching: &StitchingGraph,
+        measurements: &BodyMeasurements,
+        materials: &MaterialSet,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+    ) -> Self {
+        let mut sim =
+            Self::start_dressing(pieces, layers, stitching, measurements, materials, pose, body_form);
+        if sim.dress.is_some() {
+            while sim.dress.is_some() {
+                sim.step(1);
+            }
+            sim.step(LAYER_COUPLE_FRAMES);
+        }
+        sim
+    }
+
+    /// Like [`Self::new_layered`], but returns as soon as the innermost layer has draped.
+    pub fn start_dressing(
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        stitching: &StitchingGraph,
+        measurements: &BodyMeasurements,
+        materials: &MaterialSet,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+    ) -> Self {
+        Self::start_dressing_with_options(
+            pieces,
+            layers,
+            stitching,
+            measurements,
+            materials,
+            pose,
+            body_form,
+            Sim3dOptions::default(),
+        )
+    }
+
+    pub fn start_dressing_with_options(
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        stitching: &StitchingGraph,
+        measurements: &BodyMeasurements,
+        materials: &MaterialSet,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+        options: Sim3dOptions,
+    ) -> Self {
+        let layer_of = |pi: usize| layers.get(pi).copied().unwrap_or(0);
+        let mut levels: Vec<u8> = (0..pieces.len()).filter(|&i| pieces[i].visible).map(layer_of).collect();
+        levels.sort_unstable();
+        levels.dedup();
+        if levels.len() <= 1 {
+            let mut sim = Self::new_unsettled_with_options(
+                pieces,
+                layers,
+                &[],
+                stitching,
+                measurements,
+                materials,
+                pose,
+                body_form,
+                options,
+            );
+            sim.step(INIT_FRAMES);
+            return sim;
+        }
+        let plan = DressPlan {
+            pieces: pieces.to_vec(),
+            layers: (0..pieces.len()).map(layer_of).collect(),
+            stitching: stitching.clone(),
+            measurements: measurements.clone(),
+            materials: materials.clone(),
+            pose,
+            body_form,
+            options,
+            levels,
+            stage: 0,
+            saved_inv_mass: Vec::new(),
+        };
+        let mut sim = Self::dress_stage(plan, 0, &[]);
+        while sim.dress.as_ref().map(|d| d.stage == 0).unwrap_or(false) {
+            sim.step(1);
+        }
+        sim
+    }
+
+    /// Builds the scene for one dressing stage: every layer up to `levels[stage]`, the lower ones
+    /// kept frozen exactly where they `settled` (their vertices come first, in the same order),
+    /// the new one placed around that settled cloth.
+    fn dress_stage(mut plan: DressPlan, stage: usize, settled: &[Vec3]) -> Self {
+        let level = plan.levels[stage];
+        let keep: Vec<usize> = (0..plan.pieces.len()).filter(|&i| plan.layers[i] <= level).collect();
+        let sub_pieces: Vec<PatternPiece> = keep.iter().map(|&i| plan.pieces[i].clone()).collect();
+        let sub_layers: Vec<u8> = keep.iter().map(|&i| plan.layers[i]).collect();
+        let mut sim = Self::new_unsettled_with_options(
+            &sub_pieces,
+            &sub_layers,
+            settled,
+            &plan.stitching,
+            &plan.measurements,
+            &plan.materials,
+            plan.pose,
+            plan.body_form,
+            plan.options,
+        );
+        // Piece indices refer to this stage's subset: map them to the full outfit.
+        for vp in &mut sim.vert_piece {
+            *vp = keep[*vp as usize] as u32;
+        }
+        let saved = sim.core.inv_mass.clone();
+        for w in sim.core.inv_mass.iter_mut().take(settled.len()) {
+            *w = 0.0;
+        }
+        sim.sew_frames = SEW_FRAMES;
+        plan.stage = stage;
+        plan.saved_inv_mass = saved;
+        sim.dress = Some(Box::new(plan));
+        sim
+    }
+
+    /// Called after every frame while dressing: gentle sewing lasts until the new layer's seams
+    /// meet (bounded), then it settles; at the end of a stage the next layer is put on.
+    fn advance_dressing(&mut self) {
+        let Some(plan) = self.dress.as_ref() else { return };
+        if self.step_count + 1 == self.sew_frames
+            && self.sew_frames < LAYER_MAX_SEW_FRAMES
+            && self.seam_gap_stats_mm().1 > LAYER_SEWN_GAP_MM
+        {
+            self.sew_frames += 5;
+        }
+        if self.step_count < self.sew_frames + SETTLE_FRAMES {
+            return;
+        }
+        let last = plan.stage + 1 == plan.levels.len();
+        let mut plan = self.dress.take().expect("dressing plan");
+        self.core.inv_mass = std::mem::take(&mut plan.saved_inv_mass);
+        if last {
+            return;
+        }
+        let settled = self.core.pos.clone();
+        let next = plan.stage + 1;
+        *self = Self::dress_stage(*plan, next, &settled);
+    }
+
+    /// `(layer being put on, number of layers)` while the outfit is still being dressed.
+    pub fn dressing_progress(&self) -> Option<(usize, usize)> {
+        self.dress.as_ref().map(|d| (d.stage + 1, d.levels.len()))
+    }
+
+
     /// Builds the session with panels at their initial arrangement, before any simulation.
     #[doc(hidden)]
     pub fn new_unsettled(
         pieces: &[PatternPiece],
+        layers: &[u8],
+        settled: &[Vec3],
         stitching: &StitchingGraph,
         measurements: &BodyMeasurements,
         materials: &MaterialSet,
@@ -1079,6 +1312,8 @@ impl ClothSimSession {
     ) -> Self {
         Self::new_unsettled_with_options(
             pieces,
+            layers,
+            settled,
             stitching,
             measurements,
             materials,
@@ -1091,6 +1326,8 @@ impl ClothSimSession {
     #[doc(hidden)]
     pub fn new_unsettled_with_options(
         pieces: &[PatternPiece],
+        layers: &[u8],
+        settled: &[Vec3],
         stitching: &StitchingGraph,
         measurements: &BodyMeasurements,
         materials: &MaterialSet,
@@ -1175,9 +1412,31 @@ impl ClothSimSession {
         // Trims are laid onto their partner seams once every other panel is placed.
         let mut trims: Vec<(usize, usize, PanelMesh)> = Vec::new(); // (piece idx, panel idx, mesh)
 
-        for (pi, p) in pieces.iter().enumerate() {
+        // Pieces are placed inner layer first, so each outer layer wraps around the cloth
+        // already placed under it.
+        let layer_of = |pi: usize| layers.get(pi).copied().unwrap_or(0);
+        let mut order: Vec<usize> = (0..pieces.len()).collect();
+        order.sort_by_key(|&pi| layer_of(pi));
+        let mut vert_layer: Vec<u8> = Vec::new();
+        let mut vert_piece: Vec<u32> = Vec::new();
+        let mut placed_zones: Vec<(ArrangementZone, usize, usize, u8)> = Vec::new();
+        let mut shell = InnerShell { gap: LAYER_PLACE_GAP, ..Default::default() };
+        let mut shell_layer: Option<u8> = None;
+
+        for pi in order {
+            let p = &pieces[pi];
             if !p.visible {
                 continue;
+            }
+            let layer = layer_of(pi);
+            if shell_layer != Some(layer) {
+                shell = InnerShell { gap: LAYER_PLACE_GAP, ..Default::default() };
+                for &(z, a, b, l) in &placed_zones {
+                    if l < layer {
+                        shell.add(z, &positions[a..b]);
+                    }
+                }
+                shell_layer = Some(layer);
             }
             let unfold = p.mirror_fold_edge.is_some();
             let spawn_pair = !unfold && p.cut_quantity == 2;
@@ -1218,11 +1477,19 @@ impl ClothSimSession {
                 let start = positions.len();
                 let placed = if pm.darts_closed > 0 {
                     let closed = close_darts_for_placement(&pm);
-                    place_panel(&avatar, &closed, p, zone, side as f32, spawn_pair, &ctx)
+                    place_panel(&avatar, &closed, p, zone, side as f32, spawn_pair, &ctx, &shell)
                 } else {
-                    place_panel(&avatar, &pm, p, zone, side as f32, spawn_pair, &ctx)
+                    place_panel(&avatar, &pm, p, zone, side as f32, spawn_pair, &ctx, &shell)
                 };
                 positions.extend(placed);
+                vert_layer.resize(positions.len(), layer);
+                vert_piece.resize(positions.len(), pi as u32);
+                if positions.len() <= settled.len() {
+                    // A lower layer that already draped: keep it where it settled.
+                    let end = positions.len();
+                    positions[start..].copy_from_slice(&settled[start..end]);
+                }
+                placed_zones.push((zone, start, positions.len(), layer));
                 rest2d.extend(pm.raw_2d_mm.iter().map(|q| Point2::new(q.x * 0.001, q.y * 0.001)));
                 let tri_start = tri_idx.len();
                 for (k, t) in pm.triangles.iter().enumerate() {
@@ -1469,6 +1736,11 @@ impl ClothSimSession {
             }
         }
 
+        // Settled lower layers keep their draped shape (trims included).
+        if !settled.is_empty() && settled.len() <= positions.len() {
+            positions[..settled.len()].copy_from_slice(settled);
+        }
+
         // Make every panel's front face point away from the body (correct two-sided shading).
         for pr in &panels {
             let mut score = 0.0_f32;
@@ -1656,15 +1928,16 @@ impl ClothSimSession {
                 }
             }
         }
-        let mut vert_layer = vec![1u8; n];
+        let mut self_vert_layer = vec![1u8; n];
         let mut tri_layer = vec![1u8; ntri];
         for (ti, t) in core.tris.iter().enumerate() {
             let role = slot_roles.get(t.slot as usize).map(|s| s.as_str()).unwrap_or("shell");
-            let lyr = garment_layer_for_role(role);
+            let g_lyr = vert_layer.get(t.v[0]).copied().unwrap_or(0).min(60);
+            let lyr = g_lyr * 4 + garment_layer_for_role(role);
             tri_layer[ti] = lyr;
             for &vi in &t.v {
                 if vi < n {
-                    vert_layer[vi] = lyr;
+                    self_vert_layer[vi] = lyr;
                 }
             }
         }
@@ -1767,7 +2040,7 @@ impl ClothSimSession {
         core.refresh_materials();
         let vbd = VbdSolverState::new(&core);
         let self_tris_init: Vec<[usize; 3]> = core.tris.iter().map(|t| t.v).collect();
-        let self_hash = ClothSpatialHash::new(vert_panel, vert_layer, &core.sew, &seam_welds, &self_tris_init);
+        let self_hash = ClothSpatialHash::new(vert_panel, self_vert_layer, &core.sew, &seam_welds, &self_tris_init);
         let mut edge_root_counts: HashMap<(usize, usize), usize> = HashMap::new();
         for tri in triangles.chunks_exact(3) {
             let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
@@ -1848,6 +2121,19 @@ impl ClothSimSession {
             max_motion_mm_s: 0.0,
             min_edge_mm: if min_edge_mm.is_finite() { min_edge_mm as f32 } else { 0.0 },
             max_edge_mm: max_edge_mm as f32,
+            layers: {
+                let mut l = vert_layer.clone();
+                l.sort_unstable();
+                l.dedup();
+                l
+            },
+            vert_layer,
+            vert_piece,
+            vert_thickness: vec![0.001; n],
+            layer_contacts: vec![[None, None]; n],
+            vert_room: vec![f32::INFINITY; n],
+            sew_frames: SEW_FRAMES,
+            dress: None,
             flat_positions: vec![0.0; n * 3],
             flat_normals: vec![0.0; n * 3],
             flat_strain_pct: vec![0.0; n],
@@ -2001,9 +2287,11 @@ impl ClothSimSession {
         let mut off = vec![0.0_f32; n];
         let mut fr = vec![0.0_f32; n];
         let mut cnt = vec![0u32; n];
+        let mut thick = vec![0.0_f32; n];
         for t in &self.core.tris {
             let m = &self.core.mats[t.slot as usize];
             for &v in &t.v {
+                thick[v] = thick[v].max(m.thickness);
                 off[v] = off[v].max(m.contact_offset());
                 fr[v] += m.friction;
                 cnt[v] += 1;
@@ -2012,6 +2300,7 @@ impl ClothSimSession {
         for i in 0..n {
             self.vert_offset[i] = if off[i] > 0.0 { off[i] } else { 0.003 };
             self.vert_friction[i] = if cnt[i] > 0 { fr[i] / cnt[i] as f32 } else { 0.4 };
+            self.vert_thickness[i] = if thick[i] > 0.0 { thick[i] } else { 0.001 };
         }
     }
 
@@ -2209,7 +2498,7 @@ impl ClothSimSession {
         for _ in 0..num_steps {
             self.step_count += 1;
             let f = self.step_count as f32;
-            let (sew_frames, settle_frames) = (SEW_FRAMES as f32, SETTLE_FRAMES as f32);
+            let (sew_frames, settle_frames) = (self.sew_frames as f32, SETTLE_FRAMES as f32);
             self.core.cross_seam_enabled = f >= sew_frames;
             let run_vbd = use_vbd_now && f >= sew_frames;
             let substeps = if run_vbd { VBD_SUBSTEPS } else { SUBSTEPS };
@@ -2220,7 +2509,10 @@ impl ClothSimSession {
                 (0.10 + (f - sew_frames) / settle_frames).min(1.0)
             };
             let max_pull = if f < sew_frames {
-                0.0005 + 0.0015 * (f / sew_frames)
+                // An outer layer whose seams are still open past the usual sewing time pulls a
+                // little harder (single garments never get here).
+                let extended = ((f - SEW_FRAMES as f32) / 30.0).clamp(0.0, 1.0);
+                0.0005 + 0.0015 * (f / SEW_FRAMES as f32).min(1.0) + 0.002 * extended
             } else if f < sew_frames + settle_frames {
                 0.004
             } else {
@@ -2233,6 +2525,11 @@ impl ClothSimSession {
             };
             let gravity = Vec3::new(0.0, -9.81 * grav, 0.0);
             self.update_near_flags();
+            let layered = self.layers.len() > 1;
+            // Contacts barely change between frames: refresh them every other frame.
+            if layered {
+                self.find_layer_contacts();
+            }
             let frame_start: Vec<Vec3> = self.core.pos.clone();
 
             let extra = if f < sew_frames {
@@ -2248,7 +2545,8 @@ impl ClothSimSession {
                 ((f - sew_frames) / settle_frames).clamp(0.0, 1.0)
             };
             let jitter_ramp = ((f - (sew_frames + settle_frames + 30.0)) / 25.0).clamp(0.0, 1.0);
-            let self_tris: Vec<[usize; 3]> = if self.options.enable_self_collision && f >= sew_frames {
+            let self_tris: Vec<[usize; 3]> =
+                if self.options.enable_self_collision && !layered && f >= sew_frames {
                 self.core.tris.iter().map(|t| t.v).collect()
             } else {
                 Vec::new()
@@ -2274,6 +2572,9 @@ impl ClothSimSession {
                     self.core.solve_elastic_chains(dt, elastic_engage);
                     self.core.solve_sew(max_pull);
                     self.collide_vertices(true);
+                    if layered {
+                        self.solve_layer_contacts();
+                    }
                     self.collide_body_points();
                     if !self_tris.is_empty() {
                         if s % 4 == 0 {
@@ -2367,6 +2668,9 @@ impl ClothSimSession {
                     }
                     self.core.solve_sew(max_pull);
                     self.collide_vertices(true);
+                    if layered {
+                        self.solve_layer_contacts();
+                    }
                     self.collide_body_points();
                     self.core.solve_sew_inelastic(max_pull * 0.5);
                     self.solve_seam_welds(f >= sew_frames);
@@ -2401,6 +2705,7 @@ impl ClothSimSession {
             } else {
                 speeds[((speeds.len() - 1) as f32 * 0.99) as usize]
             };
+            self.advance_dressing();
         }
         self.sync_diagnostic_buffers();
     }
@@ -2509,6 +2814,243 @@ impl ClothSimSession {
         }
     }
 
+    /// Garment layer of every vertex (0 = closest to the body).
+    pub fn vertex_layers(&self) -> &[u8] {
+        &self.vert_layer
+    }
+
+    /// Index of each vertex's piece in the `pieces` the session was built from.
+    pub fn vertex_pieces(&self) -> &[u32] {
+        &self.vert_piece
+    }
+
+    /// Triangle indices without the triangles of hidden pieces (`shown[piece] == false`). The
+    /// hidden cloth is still simulated, so the garments over it keep their drape.
+    pub fn triangle_indices_shown(&self, shown: &[bool]) -> Vec<u32> {
+        self.triangles
+            .chunks_exact(3)
+            .filter(|t| shown.get(self.vert_piece[t[0] as usize] as usize).copied().unwrap_or(true))
+            .flatten()
+            .copied()
+            .collect()
+    }
+
+    /// Solidified render indices without hidden pieces (`shown[piece] == false`).
+    pub fn render_indices_shown(&self, shown: &[bool]) -> Vec<u32> {
+        let n = self.core.pos.len() as u32;
+        let mut out = Vec::with_capacity(self.render_indices.len());
+        for t in self.triangles.chunks_exact(3) {
+            if shown
+                .get(self.vert_piece[t[0] as usize] as usize)
+                .copied()
+                .unwrap_or(true)
+            {
+                out.extend_from_slice(t);
+            }
+        }
+        for t in self.triangles.chunks_exact(3) {
+            if shown
+                .get(self.vert_piece[t[0] as usize] as usize)
+                .copied()
+                .unwrap_or(true)
+            {
+                out.push(n + t[0]);
+                out.push(n + t[2]);
+                out.push(n + t[1]);
+            }
+        }
+        for (ei, &(a, _b)) in self.open_boundary_edges.iter().enumerate() {
+            if shown
+                .get(self.vert_piece[a] as usize)
+                .copied()
+                .unwrap_or(true)
+            {
+                let b = 2 * n + (4 * ei) as u32;
+                out.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+            }
+        }
+        out
+    }
+
+    /// Finds, for every vertex, the nearest triangle of a lower layer (it must stay outside it)
+    /// and of a higher layer (it must stay under it). Only triangles that the vertex projects
+    /// into count, so cloth hanging past another layer's hem is free to fall inwards.
+    fn find_layer_contacts(&mut self) {
+        let pos = &self.core.pos;
+        // Area-weighted vertex normals (every panel's faces point away from the body).
+        let mut vn = vec![Vec3::ZERO; pos.len()];
+        let mut tn = Vec::with_capacity(self.core.tris.len());
+        for t in &self.core.tris {
+            let n = pos[t.v[1]].sub(pos[t.v[0]]).cross(pos[t.v[2]].sub(pos[t.v[0]]));
+            for &i in &t.v {
+                vn[i] = vn[i].add(n);
+            }
+            tn.push(n.normalized());
+        }
+        for n in &mut vn {
+            *n = n.normalized();
+        }
+        // Flat grid: every triangle once, by its centre; cells of 50 mm searched +-1 cover any
+        // triangle (up to ~20 mm across) within LAYER_SEARCH of a vertex.
+        let hc = 0.05_f32;
+        let key = |p: Vec3| -> (i32, i32, i32) {
+            ((p.x / hc).floor() as i32, (p.y / hc).floor() as i32, (p.z / hc).floor() as i32)
+        };
+        let mut keyed: Vec<((i32, i32, i32), u32)> = self
+            .core
+            .tris
+            .iter()
+            .enumerate()
+            .map(|(k, t)| {
+                let ctr = pos[t.v[0]].add(pos[t.v[1]]).add(pos[t.v[2]]).scale(1.0 / 3.0);
+                (key(ctr), k as u32)
+            })
+            .collect();
+        keyed.sort_unstable_by_key(|e| e.0);
+        let mut cells: HashMap<(i32, i32, i32), (u32, u32)> = HashMap::with_capacity(keyed.len() / 4);
+        let mut i = 0;
+        while i < keyed.len() {
+            let mut j = i + 1;
+            while j < keyed.len() && keyed[j].0 == keyed[i].0 {
+                j += 1;
+            }
+            cells.insert(keyed[i].0, (i as u32, j as u32));
+            i = j;
+        }
+        for v in 0..pos.len() {
+            let lv = self.vert_layer[v];
+            let p = pos[v];
+            let c = key(p);
+            let mut best: [(f32, Option<LayerContact>); 2] = [(f32::INFINITY, None); 2];
+            for x in c.0 - 1..=c.0 + 1 {
+                for y in c.1 - 1..=c.1 + 1 {
+                    for z in c.2 - 1..=c.2 + 1 {
+                        let Some(&(s0, s1)) = cells.get(&(x, y, z)) else { continue };
+                        for &(_, k) in &keyed[s0 as usize..s1 as usize] {
+                            let t = &self.core.tris[k as usize];
+                            let lt = self.vert_layer[t.v[0]];
+                            if lt == lv {
+                                continue;
+                            }
+                            let stacked = vn[v].dot(tn[k as usize]) >= LAYER_MIN_ALIGN;
+                            let slot = if lt < lv { 0 } else { 1 };
+                            let Some((d, bary)) = project_on_triangle(p, pos[t.v[0]], pos[t.v[1]], pos[t.v[2]]) else {
+                                continue;
+                            };
+                            if d.abs() > LAYER_SEARCH || d.abs() >= best[slot].0 {
+                                continue;
+                            }
+                            let side = if stacked {
+                                if lt < lv { 1.0 } else { -1.0 }
+                            } else if d.abs() > 0.0005 {
+                                d.signum()
+                            } else {
+                                continue;
+                            };
+                            best[slot] = (d.abs(), Some(LayerContact { tri: k, bary, side, stacked }));
+                        }
+                    }
+                }
+            }
+            self.layer_contacts[v] = [best[0].1, best[1].1];
+        }
+    }
+
+    /// Signed clearance of vertex `v` from the other layer in contact `c` (negative = wrong side).
+    fn layer_clearance(&self, v: usize, c: &LayerContact) -> Option<(f32, Vec3)> {
+        let t = self.core.tris[c.tri as usize].v;
+        let x = [self.core.pos[t[0]], self.core.pos[t[1]], self.core.pos[t[2]]];
+        let nraw = x[1].sub(x[0]).cross(x[2].sub(x[0]));
+        if nraw.len_sq() < 1e-14 {
+            return None;
+        }
+        let n = nraw.normalized();
+        let b = c.bary;
+        let q = x[0].scale(b[0]).add(x[1].scale(b[1])).add(x[2].scale(b[2]));
+        Some((self.core.pos[v].sub(q).dot(n) * c.side, n.scale(c.side)))
+    }
+
+    /// One-sided, mass-weighted, inelastic push between a vertex and the other layer's triangle,
+    /// with Coulomb friction on their relative sliding. Frozen cloth (inverse mass 0) stays put.
+    fn solve_layer_contacts(&mut self) {
+        for v in 0..self.core.pos.len() {
+            for c in self.layer_contacts[v] {
+                let Some(c) = c else { continue };
+                let Some((d, dir)) = self.layer_clearance(v, &c) else { continue };
+                let t = self.core.tris[c.tri as usize].v;
+                let gap = 0.5 * (self.vert_thickness[v] + self.vert_thickness[t[0]]) + LAYER_AIR_GAP;
+                if d >= gap || d < -LAYER_MAX_DEPTH {
+                    continue;
+                }
+                let b = c.bary;
+                let inv = &self.core.inv_mass;
+                // Lower layers have priority: the outer side of a contact always gives way, so an
+                // inner garment drapes exactly as it would alone (no self-collision is needed to
+                // keep it from being shoved into hollows such as under the bust).
+                let tri_w = [inv[t[0]] * b[0], inv[t[1]] * b[1], inv[t[2]] * b[2]];
+                let (wv, wt) = if !c.stacked {
+                    (inv[v], tri_w)
+                } else if self.vert_layer[v] > self.vert_layer[t[0]] {
+                    (inv[v], [0.0; 3])
+                } else {
+                    (0.0, tri_w)
+                };
+                let wsum = wv + wt[0] * b[0] + wt[1] * b[1] + wt[2] * b[2];
+                if wsum <= 1e-12 {
+                    continue;
+                }
+                // Cloth arriving from the correct side is stopped at once; cloth already on the
+                // wrong side (placement overlaps) is eased back out.
+                let push = if d >= 0.0 { gap - d } else { (gap - d).min(gap + LAYER_MAX_PUSH) };
+                let lambda = push / wsum;
+                let dv = dir.scale(wv * lambda);
+                let p_new = self.core.pos[v].add(dv);
+                // Inelastic: no velocity into the other layer, at most a crawl away from it.
+                let vel = p_new.sub(self.core.prev[v]);
+                let vn = vel.dot(dir);
+                let vn_new = vn.clamp(0.0, MAX_SEPARATION);
+                self.core.pos[v] = p_new;
+                self.core.prev[v] = p_new.sub(vel.sub(dir.scale(vn))).sub(dir.scale(vn_new));
+                for k in 0..3 {
+                    let dk = dir.scale(wt[k] * lambda);
+                    self.core.pos[t[k]] = self.core.pos[t[k]].sub(dk);
+                    self.core.prev[t[k]] = self.core.prev[t[k]].sub(dk);
+                }
+                if wv > 0.0 {
+                    let mu = 0.5 * (self.vert_friction[v] + self.vert_friction[t[0]]);
+                    let vel_v = self.core.pos[v].sub(self.core.prev[v]);
+                    let mut vel_t = Vec3::ZERO;
+                    for k in 0..3 {
+                        vel_t = vel_t.add(self.core.pos[t[k]].sub(self.core.prev[t[k]]).scale(b[k]));
+                    }
+                    let rel = vel_v.sub(vel_t);
+                    let rt = rel.sub(dir.scale(rel.dot(dir)));
+                    let lt = rt.len();
+                    let damp = if lt <= mu * push { 1.0 } else { mu * push / lt };
+                    self.core.prev[v] = self.core.prev[v].add(rt.scale(damp));
+                }
+            }
+        }
+    }
+
+    /// Vertices found more than 1 mm on the wrong side of another garment layer (places where
+    /// one garment shows through another).
+    pub fn layer_crossings(&mut self) -> usize {
+        if self.layers.len() <= 1 {
+            return 0;
+        }
+        self.find_layer_contacts();
+        (0..self.core.pos.len())
+            .filter(|&v| {
+                self.layer_contacts[v].iter().flatten().filter(|c| c.stacked).any(|c| {
+                    self.layer_clearance(v, c)
+                        .map(|(d, _)| (-LAYER_MAX_DEPTH..-0.001).contains(&d))
+                        .unwrap_or(false)
+                })
+            })
+            .count()
+    }
+
     fn update_near_flags(&mut self) {
         for (k, t) in self.core.tris.iter().enumerate() {
             self.tri_near[k] = t.v.iter().any(|&v| {
@@ -2528,6 +3070,9 @@ impl ClothSimSession {
             if dy > 0.0 {
                 let lift = 0.5 * dy;
                 for &v in verts {
+                    if self.core.inv_mass[v] <= 0.0 {
+                        continue; // a frozen layer keeps its place while another one drapes
+                    }
                     self.core.pos[v].y += lift;
                     self.core.prev[v].y += lift;
                 }
@@ -2548,6 +3093,7 @@ impl ClothSimSession {
             let c = &mut self.contacts[i];
             let moved = p.sub(c.at).len();
             if c.dist >= 0.0 && c.dist - moved > off + 0.004 {
+                self.vert_room[i] = c.dist - moved - off;
                 self.core.pos[i] = p;
                 continue;
             }
@@ -2569,12 +3115,14 @@ impl ClothSimSession {
                     None => {
                         c.dist = r;
                         c.at = p;
+                        self.vert_room[i] = r - off;
                         self.core.pos[i] = p;
                         continue;
                     }
                 }
             }
             let d = p.sub(c.q).dot(c.n);
+            self.vert_room[i] = (d - off).max(0.0);
             if d < off {
                 // Inelastic contact: the push-out moves the vertex but never launches it, inward
                 // velocity is removed, and Coulomb friction acts on the sliding part.
@@ -2677,6 +3225,8 @@ impl ClothSimSession {
                 self.options.wind_mps[2],
             )
             .len(),
+            dressing_layer: self.dressing_progress().map(|d| d.0).unwrap_or(0),
+            dressing_layers: self.dressing_progress().map(|d| d.1).unwrap_or(0),
         }
     }
 
@@ -2834,6 +3384,31 @@ impl ClothSimSession {
             }
         }
     }
+}
+
+/// Projects `p` on the plane of triangle `abc` (normal `(b - a) x (c - a)`). Returns the signed
+/// distance along that normal and the barycentric coordinates of the foot, or `None` when the
+/// foot falls outside the triangle (a 20 % margin closes gaps at folded edges).
+fn project_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<(f32, [f32; 3])> {
+    const MARGIN: f32 = -0.2;
+    let ab = b.sub(a);
+    let ac = c.sub(a);
+    let n = ab.cross(ac);
+    let n2 = n.len_sq();
+    if n2 < 1e-14 {
+        return None;
+    }
+    let ap = p.sub(a);
+    let d = ap.dot(n) / n2.sqrt();
+    let w_b = ap.cross(ac).dot(n) / n2;
+    let w_c = ab.cross(ap).dot(n) / n2;
+    let w_a = 1.0 - w_b - w_c;
+    if w_a < MARGIN || w_b < MARGIN || w_c < MARGIN {
+        return None;
+    }
+    let (ca, cb, cc) = (w_a.max(0.0), w_b.max(0.0), w_c.max(0.0));
+    let s = (ca + cb + cc).max(1e-6);
+    Some((d, [ca / s, cb / s, cc / s]))
 }
 
 fn hex_to_rgb(hex: &str) -> [f32; 3] {

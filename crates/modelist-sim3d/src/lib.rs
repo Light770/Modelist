@@ -715,4 +715,216 @@ mod tests {
         assert!(sim.render_positions().iter().all(|v| v.is_finite()));
         assert!(sim.render_normals().iter().all(|v| v.is_finite()));
     }
+
+    /// Drafts a template with some variables overridden; `ns` moves its IDs to a namespace so two
+    /// garments drafted from the same template can share one scene.
+    fn draft_variant(
+        tmpl: &str,
+        overrides: &[(&str, &str)],
+        ns: Option<&str>,
+    ) -> (Vec<modelist_core::model::PatternPiece>, modelist_core::model::StitchingGraph) {
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let mut vars = build_default_variables(tmpl);
+        for (k, v) in overrides {
+            let var = vars.iter_mut().find(|x| x.name == *k).expect("variable");
+            var.expr = (*v).to_string();
+        }
+        let (mut pieces, mut stitching, _, _) = build_template_pieces(tmpl, &m, &e, &vars, &[], &[]);
+        if let Some(ns) = ns {
+            modelist_core::model::remap_entity_ids(&mut pieces, &mut stitching.bindings, ns);
+        }
+        (pieces, stitching)
+    }
+
+    struct LayerRun {
+        sim: ClothSimSession,
+        quality: crate::diagnostics::DrapeQuality,
+        crossings: usize,
+    }
+
+    fn run_layers(
+        garments: &[(Vec<modelist_core::model::PatternPiece>, modelist_core::model::StitchingGraph, u8)],
+        preset: &str,
+        frames: u32,
+    ) -> LayerRun {
+        use crate::material::MaterialSet;
+        let mut pieces = Vec::new();
+        let mut layers = Vec::new();
+        let mut stitching = modelist_core::model::StitchingGraph::default();
+        for (p, s, l) in garments {
+            layers.extend(std::iter::repeat(*l).take(p.len()));
+            pieces.extend(p.iter().cloned());
+            stitching.bindings.extend(s.bindings.iter().cloned());
+        }
+        let fabric = FabricSpec::from_preset(preset);
+        let mut sim = ClothSimSession::new_layered(
+            &pieces,
+            &layers,
+            &stitching,
+            &BodyMeasurements::default(),
+            &MaterialSet::single(&fabric),
+            AvatarPose::APose,
+            AvatarBodyForm::Female,
+        );
+        sim.step(frames);
+        let quality = sim.drape_quality();
+        let crossings = sim.layer_crossings();
+        LayerRun { sim, quality, crossings }
+    }
+
+    /// Intersecting triangle pairs split into (inside layer 0, between layers, inside layer 1+).
+    fn intersections_by_layer(sim: &ClothSimSession) -> (usize, usize, usize) {
+        let tris = sim.triangle_indices();
+        let lay = sim.vertex_layers();
+        let mut out = (0, 0, 0);
+        for (a, b) in crate::diagnostics::intersecting_pairs(&sim.flat_positions, tris) {
+            let la = lay[tris[a as usize * 3] as usize];
+            let lb = lay[tris[b as usize * 3] as usize];
+            match (la.min(lb), la.max(lb)) {
+                (0, 0) => out.0 += 1,
+                (x, y) if x != y => out.1 += 1,
+                _ => out.2 += 1,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_layered_tees_do_not_pass_through_each_other() {
+        let inner = draft_variant("boxy_tee", &[("tee_chest_ease", "120")], None);
+        let outer = draft_variant(
+            "boxy_tee",
+            &[("tee_chest_ease", "300"), ("tee_body_len", "back_waist_len + 180")],
+            Some("outer"),
+        );
+        let preset = "cotton_jersey_heavy";
+        let alone_in = run_layers(&[(inner.0.clone(), inner.1.clone(), 0)], preset, 60);
+        let flat = run_layers(
+            &[(inner.0.clone(), inner.1.clone(), 0), (outer.0.clone(), outer.1.clone(), 0)],
+            preset,
+            60,
+        );
+        let t0 = std::time::Instant::now();
+        let layered = run_layers(
+            &[(inner.0.clone(), inner.1.clone(), 0), (outer.0.clone(), outer.1.clone(), 1)],
+            preset,
+            0,
+        );
+        let dress_time = t0.elapsed();
+        let mut layered = layered;
+        layered.sim.step(60);
+        layered.quality = layered.sim.drape_quality();
+        layered.crossings = layered.sim.layer_crossings();
+        let t1 = std::time::Instant::now();
+        let _ = run_layers(&[(inner.0.clone(), inner.1.clone(), 0)], preset, 0);
+        eprintln!("dressing time: two layers {:?}, inner tee alone {:?}", dress_time, t1.elapsed());
+        let by_layer = intersections_by_layer(&layered.sim);
+        let stats = layered.sim.stats();
+        eprintln!(
+            "tees: inner alone {} self-intersections | one layer {} | layered {} (inner {}, between {}, outer {}) | crossings {} of {} | poke {} creases {:.1}% strain p99 {:.1}%",
+            alone_in.quality.self_intersections,
+            flat.quality.self_intersections,
+            layered.quality.self_intersections,
+            by_layer.0,
+            by_layer.1,
+            by_layer.2,
+            layered.crossings,
+            stats.vertex_count,
+            layered.quality.poke_through_count,
+            layered.quality.sharp_crease_pct,
+            stats.max_strain_pct,
+        );
+        if let Ok(dir) = std::env::var("MODELIST_LAYER_OBJ") {
+            dump_obj(&layered.sim, &format!("{dir}/layered"));
+            dump_obj(&flat.sim, &format!("{dir}/flat"));
+        }
+        assert!(layered.sim.flat_positions.iter().all(|v| v.is_finite()));
+        assert!(stats.min_clearance_mm >= 0.0);
+        // Stacked cloth stays in order: almost no vertex ends up under the layer below it.
+        assert!(layered.crossings <= stats.vertex_count / 100, "crossings {}", layered.crossings);
+        // The inner garment drapes as it does alone (lower layers have priority).
+        assert!(by_layer.0 <= 2 * alone_in.quality.self_intersections.max(50));
+        // Far fewer intersections than both garments simulated as one layer. What remains sits
+        // at the armpits, where an inner sleeve meets an outer side panel side by side; that
+        // needs general cloth-to-cloth collision, which single garments lack too.
+        assert!(layered.quality.self_intersections * 3 < flat.quality.self_intersections);
+        assert!(layered.quality.poke_through_count <= 5);
+        assert!(layered.quality.sharp_crease_pct <= 5.0);
+        assert!(stats.max_strain_pct <= 40.0);
+    }
+
+    #[test]
+    fn test_tuck_in_is_the_layer_order() {
+        let tee = draft_variant("boxy_tee", &[("tee_chest_ease", "120")], None);
+        let trousers = draft_variant("wide_pleat_trouser", &[], Some("trousers"));
+        let preset = "cotton_jersey_heavy";
+        for (name, tee_layer, trouser_layer) in [("tucked", 0u8, 1u8), ("untucked", 1, 0)] {
+            let run = run_layers(
+                &[(tee.0.clone(), tee.1.clone(), tee_layer), (trousers.0.clone(), trousers.1.clone(), trouser_layer)],
+                preset,
+                60,
+            );
+            let stats = run.sim.stats();
+            let by_layer = intersections_by_layer(&run.sim);
+            // Where is the tee hem relative to the trouser waist? Mean distance from the body of
+            // tee vs trouser vertices in the band just below the waist.
+            let lay = run.sim.vertex_layers();
+            let waist = run.sim.avatar.waist_y;
+            let (mut tee_d, mut tee_n, mut tr_d, mut tr_n) = (0.0f32, 0usize, 0.0f32, 0usize);
+            for (i, p) in run.sim.flat_positions.chunks_exact(3).enumerate() {
+                if p[1] < waist - 0.10 || p[1] > waist - 0.03 {
+                    continue;
+                }
+                let d = run.sim.flat_clearance_mm[i];
+                if lay[i] == tee_layer {
+                    tee_d += d;
+                    tee_n += 1;
+                } else {
+                    tr_d += d;
+                    tr_n += 1;
+                }
+            }
+            let (tee_d, tr_d) = (tee_d / tee_n.max(1) as f32, tr_d / tr_n.max(1) as f32);
+            eprintln!(
+                "{name}: intersections {} (between layers {}) crossings {} poke {} strain p99 {:.1}% | below waist: tee {tee_d:.1} mm, trousers {tr_d:.1} mm from the body",
+                run.quality.self_intersections, by_layer.1, run.crossings, run.quality.poke_through_count, stats.max_strain_pct
+            );
+            if let Ok(dir) = std::env::var("MODELIST_LAYER_OBJ") {
+                dump_obj(&run.sim, &format!("{dir}/{name}"));
+            }
+            assert!(run.sim.flat_positions.iter().all(|v| v.is_finite()));
+            assert!(run.crossings <= stats.vertex_count / 100, "{name} crossings {}", run.crossings);
+            if tee_n > 20 && tr_n > 20 {
+                if tee_layer == 0 {
+                    assert!(tee_d < tr_d, "tucked: the tee should sit under the trousers");
+                } else {
+                    assert!(tee_d > tr_d, "untucked: the tee should hang over the trousers");
+                }
+            }
+        }
+    }
+
+    /// Writes `<base>_avatar.obj` and `<base>_cloth.obj` (5th vertex value = layer * 10).
+    fn dump_obj(sim: &ClothSimSession, base: &str) {
+        use std::fmt::Write as _;
+        let mut a = String::new();
+        let am = &sim.avatar_mesh;
+        for p in am.positions.chunks_exact(3) {
+            let _ = writeln!(a, "v {} {} {}", p[0], p[1], p[2]);
+        }
+        for f in am.indices.chunks_exact(3) {
+            let _ = writeln!(a, "f {} {} {}", f[0] + 1, f[1] + 1, f[2] + 1);
+        }
+        std::fs::write(format!("{base}_avatar.obj"), a).unwrap();
+        let mut c = String::new();
+        let lay = sim.vertex_layers();
+        for (i, p) in sim.flat_positions.chunks_exact(3).enumerate() {
+            let _ = writeln!(c, "v {} {} {} {}", p[0], p[1], p[2], lay.get(i).copied().unwrap_or(0) as f32 * 10.0);
+        }
+        for f in sim.triangle_indices().chunks_exact(3) {
+            let _ = writeln!(c, "f {} {} {}", f[0] + 1, f[1] + 1, f[2] + 1);
+        }
+        std::fs::write(format!("{base}_cloth.obj"), c).unwrap();
+    }
 }

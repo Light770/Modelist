@@ -6,8 +6,8 @@ use crate::blocks::{build_default_variables, build_template_pieces};
 use crate::curve::edge_total_length;
 use crate::grading::compute_cross_size_qa;
 use crate::model::{
-    det_id, polygon_signed_area, BodyMeasurements, EaseTable, GradeMode, PatternProject, SeamDriver,
-    SizeTable, StackAnchor,
+    polygon_signed_area, BodyMeasurements, EaseTable, PatternProject, SeamDriver,
+    SizeTable,
 };
 use crate::offset::{evaluate_piece, has_self_intersection};
 use crate::seam::{interface_total_length, synthesize_partner_notches};
@@ -161,28 +161,18 @@ fn starter_styles_valid_across_size_run() {
 
 /// A fresh project for a template with the full size run visible.
 fn project_for(tid: &str) -> PatternProject {
-    PatternProject {
-        id: det_id(&format!("project:{tid}")),
-        name: tid.into(),
-        template_id: tid.into(),
-        measurements: BodyMeasurements::default(),
-        ease: EaseTable::default(),
-        fabric: Default::default(),
-        role_fabrics: vec![],
-        variables: build_default_variables(tid),
-        size_table: SizeTable {
-            sizes: SIZES.iter().map(|s| s.to_string()).collect(),
-            active_size: "M".into(),
-            visible_sizes: SIZES.iter().map(|s| s.to_string()).collect(),
-            overrides: HashMap::new(),
-        },
-        grade_mode: GradeMode::ParametricMtm,
-        stack_anchor: StackAnchor::GrainlineMidpoint,
-        ops: vec![],
-        custom_pieces: vec![],
-        suppressed_ops: vec![],
-        rollback_index: None,
-    }
+    let mut p = super::new_project(tid);
+    p.name = tid.into();
+    p.components[0].fabric = Default::default();
+    p.components[0].role_fabrics = vec![];
+    p.components[0].variables = build_default_variables(tid);
+    p.size_table = SizeTable {
+        sizes: SIZES.iter().map(|s| s.to_string()).collect(),
+        active_size: "M".into(),
+        visible_sizes: SIZES.iter().map(|s| s.to_string()).collect(),
+        overrides: HashMap::new(),
+    };
+    p
 }
 
 /// Dev tool, not part of the suite: writes one graded SVG (XS-XXL nested on M) per style.

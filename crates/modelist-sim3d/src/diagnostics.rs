@@ -190,17 +190,28 @@ pub fn drape_quality(
         q.mean_dihedral_deg = (angle_sum / hinge_count as f64) as f32;
     }
 
-    // 3. Self-intersections between non-adjacent triangles. Pairs whose corners nearly coincide
-    //    are skipped: those are sewn seam neighbours from different panels.
+    // 3. Self-intersections between non-adjacent triangles.
+    q.self_intersections = intersecting_pairs_in(cloth_pos, cloth_tris, &grid).len();
+    q
+}
+
+/// Pairs of non-adjacent cloth triangles that intersect. Pairs whose corners nearly coincide are
+/// skipped: those are sewn seam neighbours from different panels.
+pub fn intersecting_pairs(cloth_pos: &[f32], cloth_tris: &[u32]) -> Vec<(u32, u32)> {
+    if cloth_tris.len() < 3 {
+        return Vec::new();
+    }
+    let grid = tri_hash(cloth_pos, cloth_tris, 0.025);
+    intersecting_pairs_in(cloth_pos, cloth_tris, &grid)
+}
+
+fn intersecting_pairs_in(cloth_pos: &[f32], cloth_tris: &[u32], grid: &HashMap<Cell, Vec<u32>>) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
     let mut seen: HashSet<(u32, u32)> = HashSet::new();
     for list in grid.values() {
         for i in 0..list.len() {
             for j in (i + 1)..list.len() {
-                let (ta, tb) = if list[i] < list[j] {
-                    (list[i], list[j])
-                } else {
-                    (list[j], list[i])
-                };
+                let (ta, tb) = if list[i] < list[j] { (list[i], list[j]) } else { (list[j], list[i]) };
                 if !seen.insert((ta, tb)) {
                     continue;
                 }
@@ -209,29 +220,19 @@ pub fn drape_quality(
                 if ia.iter().any(|v| ib.contains(v)) {
                     continue;
                 }
-                let pa = [
-                    v3(cloth_pos, ia[0] as usize),
-                    v3(cloth_pos, ia[1] as usize),
-                    v3(cloth_pos, ia[2] as usize),
-                ];
-                let pb = [
-                    v3(cloth_pos, ib[0] as usize),
-                    v3(cloth_pos, ib[1] as usize),
-                    v3(cloth_pos, ib[2] as usize),
-                ];
-                let near_seam = pa
-                    .iter()
-                    .any(|x| pb.iter().any(|y| x.sub(*y).len_sq() < 0.003 * 0.003));
+                let pa = [v3(cloth_pos, ia[0] as usize), v3(cloth_pos, ia[1] as usize), v3(cloth_pos, ia[2] as usize)];
+                let pb = [v3(cloth_pos, ib[0] as usize), v3(cloth_pos, ib[1] as usize), v3(cloth_pos, ib[2] as usize)];
+                let near_seam = pa.iter().any(|x| pb.iter().any(|y| x.sub(*y).len_sq() < 0.003 * 0.003));
                 if near_seam {
                     continue;
                 }
                 if triangles_intersect(&pa, &pb) {
-                    q.self_intersections += 1;
+                    out.push((ta, tb));
                 }
             }
         }
     }
-    q
+    out
 }
 
 fn triangles_intersect(a: &[Vec3; 3], b: &[Vec3; 3]) -> bool {

@@ -1,4 +1,4 @@
-use crate::blocks::build_template_pieces;
+use crate::blocks::build_project_pieces;
 use crate::model::{
     CurveSegment, EvaluatedPiece, GradeMode, PatternPiece, PatternProject, Point2, SeamBinding,
     StackAnchor,
@@ -162,7 +162,6 @@ pub fn evaluate_graded_nest(
         .map(|ep| (ep.piece.id, anchor_point(&ep.piece, project.stack_anchor)))
         .collect();
 
-    let active_ops = project.active_ops();
     for size in &project.size_table.visible_sizes {
         if size == &project.size_table.active_size {
             nest.insert(size.clone(), active_evaluated.to_vec());
@@ -171,14 +170,7 @@ pub fn evaluate_graded_nest(
         let m = project
             .size_table
             .measurements_for(size, &project.measurements);
-        let (mut pieces, _, _, _) = build_template_pieces(
-            &project.template_id,
-            &m,
-            &project.ease,
-            &project.variables,
-            &active_ops,
-            &project.custom_pieces,
-        );
+        let mut pieces = build_project_pieces(project, &m).pieces;
 
         if project.grade_mode == GradeMode::RuleBasedRtw {
             pieces = active_evaluated
@@ -211,20 +203,13 @@ pub fn evaluate_graded_nest(
 /// Computes the Cross-Size Stitching Balance QA Matrix across all sizes in `size_table.sizes`.
 pub fn compute_cross_size_qa(project: &PatternProject) -> Vec<CrossSizeQaRow> {
     let mut rows: HashMap<String, CrossSizeQaRow> = HashMap::new();
-    let active_ops = project.active_ops();
 
     for size in &project.size_table.sizes {
         let m = project
             .size_table
             .measurements_for(size, &project.measurements);
-        let (pieces, stitching, _, _) = build_template_pieces(
-            &project.template_id,
-            &m,
-            &project.ease,
-            &project.variables,
-            &active_ops,
-            &project.custom_pieces,
-        );
+        let draft = build_project_pieces(project, &m);
+        let (pieces, stitching) = (draft.pieces, draft.stitching);
 
         for binding in &stitching.bindings {
             let len_a = interface_total_length(&binding.interface_a, &pieces);

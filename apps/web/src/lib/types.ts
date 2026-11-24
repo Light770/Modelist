@@ -188,6 +188,8 @@ export interface DartInfo {
 
 export interface PieceSummary {
   id: string;
+  /** Garment (component) the piece belongs to. */
+  component_id: string;
   name: string;
   code: string;
   cut_quantity: number;
@@ -307,9 +309,26 @@ export interface PieceFill {
   coords: number[];
 }
 
+/** One garment of the document (a component): drafted on the shared body. */
+export interface ComponentSummary {
+  id: string;
+  name: string;
+  template_id: string;
+  /** 3D layer, 0 = next to the body. */
+  layer: number;
+  /** Shown on the canvas, in exports and in the 3D fit. */
+  visible: boolean;
+  /** Drawn in the 3D fit (a hidden garment is still worn). */
+  visible_3d: boolean;
+  piece_count: number;
+}
+
 export interface UiSnapshot {
   project_name: string;
+  /** Template of the active garment. */
   template_id: string;
+  components: ComponentSummary[];
+  active_component_id: string;
   grade_mode: GradeMode;
   stack_anchor: StackAnchor;
   active_size: string;
@@ -474,6 +493,9 @@ export interface Sim3dStats {
   pin_count: number;
   self_collision_enabled: boolean;
   wind_speed_mps: number;
+  /** While garments are being put on one layer at a time: current layer (1-based) and count. */
+  dressing_layer?: number;
+  dressing_layers?: number;
 }
 
 export function formatMm(mm: number, unit: DisplayUnit, decimals = 1): string {

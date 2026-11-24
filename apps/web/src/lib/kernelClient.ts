@@ -172,6 +172,70 @@ export const kernel = {
     return getSnapshot();
   },
 
+  /** Adds a garment from the template library; it becomes the active garment. */
+  addComponent(templateId: string, name = ''): UiSnapshot {
+    getSession().add_component(templateId, name);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  removeComponent(componentId: string): UiSnapshot {
+    getSession().remove_component(componentId);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setActiveComponent(componentId: string): UiSnapshot {
+    getSession().set_active_component(componentId);
+    bumpRender();
+    return getSnapshot();
+  },
+
+  renameComponent(componentId: string, name: string): UiSnapshot {
+    getSession().rename_component(componentId, name);
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** 3D layer of a garment (0 = next to the body); re-dresses the 3D fit when it is open. */
+  setComponentLayer(componentId: string, layer: number): UiSnapshot {
+    getSession().set_component_layer(componentId, Math.max(0, Math.min(255, Math.round(layer))));
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** Moves a garment one place outward (worn over the next one) or inward in wearing order. */
+  moveComponentLayer(componentId: string, outward: boolean): UiSnapshot {
+    getSession().move_component_layer(componentId, outward);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** Shows or hides a garment everywhere (canvas, exports, 3D). */
+  setComponentVisible(componentId: string, visible: boolean): UiSnapshot {
+    getSession().set_component_visible(componentId, visible);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** Shows or hides a garment in the 3D view only (it stays worn). */
+  setComponentVisible3d(componentId: string, visible: boolean): UiSnapshot {
+    getSession().set_component_visible_3d(componentId, visible);
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
   serializeProject(): string {
     return getSession().serialize_project_json();
   },

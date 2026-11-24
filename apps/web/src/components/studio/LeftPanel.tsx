@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
+  Box,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -7,16 +10,18 @@ import {
   EyeOff,
   FlipHorizontal2,
   Footprints,
-  Layers,
   Link2,
   Pencil,
   Plus,
   Ruler,
   SlidersHorizontal,
   Sparkles,
+  Shirt,
   SwatchBook,
+  Trash2,
 } from 'lucide-react';
 import { kernel } from '../../lib/kernelClient';
+import { removeGarment } from '../../lib/projectActions';
 import { formatMm, SEAM_PALETTE } from '../../lib/types';
 import { useStudioStore } from '../../store/studioStore';
 import { useT } from '../../lib/i18n';
@@ -36,8 +41,24 @@ export const LeftPanel: React.FC = () => {
   const [piecesOpen, setPiecesOpen] = useState(true);
   const [seamsOpen, setSeamsOpen] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [collapsedGarments, setCollapsedGarments] = useState<Set<string>>(new Set());
+  const [renamingGarment, setRenamingGarment] = useState<string | null>(null);
+  const toggleGarment = (id: string) =>
+    setCollapsedGarments((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   if (!snapshot) return null;
+
+  // Position of a garment in wearing order (inner first), as the kernel orders layers.
+  const wearOrder = snapshot.components
+    .map((c, i) => ({ id: c.id, layer: c.layer, i }))
+    .sort((a, b) => a.layer - b.layer || a.i - b.i)
+    .map((c) => c.id);
+  const wearRank = (id: string) => wearOrder.indexOf(id);
 
   const handleAutoDetect = () => {
     const { count, snapshot: next } = kernel.autoDetectSeams();
@@ -108,7 +129,7 @@ export const LeftPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Node 2: Pattern Pieces Tree */}
+      {/* Node 2: Garments (components), each with its pieces */}
       <div className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
         <div className="px-2 h-[26px] flex items-center justify-between">
           <button
@@ -116,74 +137,219 @@ export const LeftPanel: React.FC = () => {
             className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold"
           >
             {piecesOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-            <Layers className="w-3.5 h-3.5 opacity-70" />
-            <span>{t('left.pieces', { count: snapshot.pieces.length })}</span>
+            <Shirt className="w-3.5 h-3.5 opacity-70" />
+            <span>{t('left.garments', { count: snapshot.components.length })}</span>
+          </button>
+          <button
+            data-menu-trigger="add-garment"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              const st = useStudioStore.getState();
+              st.openGarmentPicker(st.garmentPicker ? null : r);
+            }}
+            className="p-1 rounded border hover:bg-[var(--bg-subtle)] cursor-pointer"
+            style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+            title={t('left.addGarment')}
+            aria-label={t('left.addGarment')}
+          >
+            <Plus className="w-3 h-3" />
           </button>
         </div>
 
         {piecesOpen && (
           <div className="px-1.5 pb-2 space-y-px">
-            {snapshot.pieces.map((p) => {
-              const selected = snapshot.selected_piece_id === p.id;
+            {snapshot.components.map((c) => {
+              const active = c.id === snapshot.active_component_id;
+              const collapsed = collapsedGarments.has(c.id);
+              const pieces = snapshot.pieces.filter((p) => p.component_id === c.id);
+              const multi = snapshot.components.length > 1;
               return (
-                <div
-                  key={p.id}
-                  onClick={() => setSnapshot(kernel.setSelection(p.id, null))}
-                  className="px-2 py-1 rounded-[3px] cursor-pointer group hover:bg-[var(--bg-hover)]"
-                  style={{
-                    background: selected ? 'var(--accent-soft)' : undefined,
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="min-w-0 flex items-center gap-1.5">
+                <div key={c.id} data-garment-id={c.id}>
+                  <div
+                    onClick={() => !active && setSnapshot(kernel.setActiveComponent(c.id))}
+                    onDoubleClick={() => setRenamingGarment(c.id)}
+                    className="px-1 h-[24px] rounded-[3px] flex items-center gap-1 cursor-pointer group hover:bg-[var(--bg-hover)]"
+                    style={{
+                      background: active && multi ? 'var(--bg-subtle)' : undefined,
+                      opacity: c.visible ? 1 : 0.5,
+                    }}
+                    title={t('left.garmentRowHint')}
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleGarment(c.id);
+                      }}
+                      className="p-0.5 rounded hover:bg-[var(--bg-subtle)]"
+                    >
+                      {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    </button>
+                    {renamingGarment === c.id ? (
+                      <input
+                        autoFocus
+                        defaultValue={c.name}
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => {
+                          setSnapshot(kernel.renameComponent(c.id, e.currentTarget.value));
+                          setRenamingGarment(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') setRenamingGarment(null);
+                        }}
+                        className="flex-1 min-w-0 h-[18px] px-1 text-[11px] rounded-[2px] border outline-none"
+                        style={{ background: 'var(--bg-surface)', borderColor: 'var(--accent)', color: 'var(--text-primary)' }}
+                      />
+                    ) : (
                       <span
-                        className="font-mono-num text-[9.5px] px-1 py-0.2 rounded border shrink-0"
-                        style={{
-                          borderColor: 'var(--border-subtle)',
-                          color: selected ? 'var(--accent)' : 'var(--text-muted)',
-                        }}
+                        className="flex-1 min-w-0 truncate text-[11px] font-semibold"
+                        style={{ color: active && multi ? 'var(--accent)' : undefined }}
                       >
-                        {p.code}
+                        {c.name}
                       </span>
-                      <span className="text-[11px] font-medium truncate">{p.name}</span>
-                    </div>
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSnapshot(kernel.mirrorPiece(p.id));
-                        }}
-                        className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
-                        title={t('left.mirror')}
+                    )}
+                    {multi && (
+                      <span
+                        className="shrink-0 font-mono-num text-[9.5px] px-1 rounded border"
+                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                        title={t('left.layerHint')}
                       >
-                        <FlipHorizontal2 className="w-3 h-3" />
-                      </button>
+                        {t('left.layer', { n: c.layer })}
+                      </span>
+                    )}
+                    <div className="flex items-center shrink-0">
+                      {multi && (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSnapshot(kernel.moveComponentLayer(c.id, false));
+                            }}
+                            disabled={wearRank(c.id) === 0}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100 disabled:!opacity-20"
+                            title={t('left.layerIn')}
+                            aria-label={t('left.layerIn')}
+                          >
+                            <ArrowDown className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSnapshot(kernel.moveComponentLayer(c.id, true));
+                            }}
+                            disabled={wearRank(c.id) === snapshot.components.length - 1}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100 disabled:!opacity-20"
+                            title={t('left.layerOut')}
+                            aria-label={t('left.layerOut')}
+                          >
+                            <ArrowUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeGarment(c.id);
+                            }}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
+                            title={t('left.removeGarment')}
+                            aria-label={t('left.removeGarment')}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setSnapshot(kernel.duplicatePiece(p.id));
-                        }}
-                        className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
-                        title={t('left.duplicate')}
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSnapshot(kernel.togglePieceVisibility(p.id));
+                          setSnapshot(kernel.setComponentVisible3d(c.id, !c.visible_3d));
                         }}
                         className="p-0.5 rounded hover:bg-[var(--bg-subtle)]"
-                        title={p.visible ? t('left.hide') : t('left.show')}
+                        title={c.visible_3d ? t('left.hide3d') : t('left.show3d')}
+                        aria-label={c.visible_3d ? t('left.hide3d') : t('left.show3d')}
+                        aria-pressed={!c.visible_3d}
                       >
-                        {p.visible ? (
-                          <Eye className="w-3 h-3 opacity-75" />
-                        ) : (
-                          <EyeOff className="w-3 h-3 opacity-35" />
-                        )}
+                        <Box className="w-3 h-3" style={{ opacity: c.visible_3d ? 0.75 : 0.25 }} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSnapshot(kernel.setComponentVisible(c.id, !c.visible));
+                        }}
+                        className="p-0.5 rounded hover:bg-[var(--bg-subtle)]"
+                        title={c.visible ? t('left.hideGarment') : t('left.showGarment')}
+                        aria-label={c.visible ? t('left.hideGarment') : t('left.showGarment')}
+                      >
+                        {c.visible ? <Eye className="w-3 h-3 opacity-75" /> : <EyeOff className="w-3 h-3 opacity-35" />}
                       </button>
                     </div>
                   </div>
+                  {!collapsed && (
+                    <div className="pl-3 space-y-px">
+                      {pieces.map((p) => {
+              const selected = snapshot.selected_piece_id === p.id;
+              return (
+                    <div
+                      key={p.id}
+                      onClick={() => setSnapshot(kernel.setSelection(p.id, null))}
+                      className="px-2 py-1 rounded-[3px] cursor-pointer group hover:bg-[var(--bg-hover)]"
+                      style={{
+                        background: selected ? 'var(--accent-soft)' : undefined,
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="min-w-0 flex items-center gap-1.5">
+                          <span
+                            className="font-mono-num text-[9.5px] px-1 py-0.2 rounded border shrink-0"
+                            style={{
+                              borderColor: 'var(--border-subtle)',
+                              color: selected ? 'var(--accent)' : 'var(--text-muted)',
+                            }}
+                          >
+                            {p.code}
+                          </span>
+                          <span className="text-[11px] font-medium truncate">{p.name}</span>
+                        </div>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSnapshot(kernel.mirrorPiece(p.id));
+                            }}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
+                            title={t('left.mirror')}
+                          >
+                            <FlipHorizontal2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSnapshot(kernel.duplicatePiece(p.id));
+                            }}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
+                            title={t('left.duplicate')}
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSnapshot(kernel.togglePieceVisibility(p.id));
+                            }}
+                            className="p-0.5 rounded hover:bg-[var(--bg-subtle)]"
+                            title={p.visible ? t('left.hide') : t('left.show')}
+                          >
+                            {p.visible ? (
+                              <Eye className="w-3 h-3 opacity-75" />
+                            ) : (
+                              <EyeOff className="w-3 h-3 opacity-35" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+              );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
