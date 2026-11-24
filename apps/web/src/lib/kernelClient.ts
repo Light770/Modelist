@@ -3,8 +3,11 @@ import { saveAutosave } from './localFiles';
 import type {
   AvatarBodyForm,
   AvatarPose,
+  BeltLoopSpec,
+  ButtonSpec,
   CornerRule,
   DrapeQuality,
+  DrawstringSpec,
   EaseSpec,
   FabricFinish,
   FabricPropertyKey,
@@ -20,6 +23,7 @@ import type {
   Sim3dStats,
   SnapHit,
   UiSnapshot,
+  ZipperSpec,
 } from './types';
 
 let wasmReady: Promise<void> | null = null;
@@ -517,6 +521,44 @@ export const kernel = {
     bumpRender();
     scheduleAutosave();
     return getSnapshot();
+  },
+
+  setEdgeDrawstring(
+    pieceId: string,
+    edgeIdx: number,
+    drawstring: DrawstringSpec | null,
+  ): UiSnapshot {
+    getSession().set_edge_drawstring(pieceId, edgeIdx, JSON.stringify(drawstring));
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setEdgeHardware(
+    pieceId: string,
+    edgeIdx: number,
+    zipper: ZipperSpec | null,
+    button: ButtonSpec | null,
+    beltLoop: BeltLoopSpec | null,
+  ): UiSnapshot {
+    getSession().set_edge_hardware(
+      pieceId,
+      edgeIdx,
+      JSON.stringify(zipper),
+      JSON.stringify(button),
+      JSON.stringify(beltLoop),
+    );
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setSim3dZipper(fraction: number): void {
+    getSession().set_sim3d_zipper(fraction);
+  },
+
+  hasSim3dZipper(): boolean {
+    return getSession().get_sim3d_has_zipper();
   },
 
   addNotch(

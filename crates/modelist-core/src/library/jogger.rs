@@ -4,9 +4,9 @@
 use super::{binding, cubic, eref, line, notch, param, sclamp, t_at_y, var, MITER};
 use crate::curve::edge_total_length;
 use crate::model::{
-    det_id, ArrangementZone, BodyMeasurements, ClosedPolyCurve, CornerRule, EaseSpec, EaseTable,
-    ElasticBandSpec, GrainRotationMode, GrainlineSpec, HemSpec, InternalLine, NotchStyle,
-    ParametricVar, PatternPiece, Point2, SeamType, StitchingGraph,
+    det_id, ArrangementZone, BodyMeasurements, ClosedPolyCurve, CornerRule, DrawstringSpec,
+    EaseSpec, EaseTable, ElasticBandSpec, GrainRotationMode, GrainlineSpec, HemSpec, InternalLine,
+    NotchStyle, ParametricVar, PatternPiece, Point2, SeamType, StitchingGraph,
 };
 use std::collections::HashMap;
 
@@ -14,15 +14,17 @@ pub const TEMPLATE_ID: &str = "jogger_pants";
 
 pub fn default_variables() -> Vec<ParametricVar> {
     vec![
-        var("jg_waist_ease", "140", "Relaxed pull-on waist ease before elastic (mm)"),
-        var("jg_hip_ease", "120", "Relaxed hip ease (mm)"),
+        var("jg_waist_ease", "160", "Relaxed pull-on waist ease before elastic (mm)"),
+        var("jg_hip_ease", "70", "Relaxed hip ease (mm)"),
         var("jg_rise_add", "15", "Waist rise above natural waist (mm)"),
         var("jg_leg_len_add", "-55", "Leg length adjustment above ankle cuff (mm)"),
         var("jg_ankle_opening", "360", "Leg hem circumference before cuff gather (mm)"),
         var("jg_cuff_h", "55", "Ribbed ankle cuff height (mm)"),
         var("jg_waistband_h", "48", "Elastic waistband height (mm)"),
-        var("jg_waist_elastic_ratio", "0.86", "Waist elastic contraction ratio (0.55-0.95)"),
+        var("jg_waist_elastic_ratio", "0.80", "Waist elastic contraction ratio (0.55-0.95)"),
         var("jg_ankle_elastic_ratio", "0.78", "Ankle cuff elastic contraction ratio (0.55-0.95)"),
+        var("jg_drawstring_len", "190", "Waist drawstring tail length (mm)"),
+        var("jg_drawstring_tighten", "0.92", "Waist drawstring cinch ratio (0.70-1.00)"),
     ]
 }
 
@@ -33,15 +35,17 @@ pub fn build(
 ) -> (Vec<PatternPiece>, StitchingGraph) {
     let id = |s: &str| det_id(&format!("{TEMPLATE_ID}:{s}"));
 
-    let waist_ease = sclamp(param(vals, "jg_waist_ease", 140.0), 10.0, 260.0);
-    let hip_ease = sclamp(param(vals, "jg_hip_ease", 120.0), 20.0, 340.0);
+    let waist_ease = sclamp(param(vals, "jg_waist_ease", 160.0), 10.0, 260.0);
+    let hip_ease = sclamp(param(vals, "jg_hip_ease", 70.0), 20.0, 340.0);
     let rise_add = sclamp(param(vals, "jg_rise_add", 15.0), -60.0, 120.0);
     let len_add = sclamp(param(vals, "jg_leg_len_add", -55.0), -300.0, 200.0);
     let ankle_open = sclamp(param(vals, "jg_ankle_opening", 360.0), 200.0, 620.0);
     let cuff_h = sclamp(param(vals, "jg_cuff_h", 55.0), 25.0, 110.0);
     let wb_h = sclamp(param(vals, "jg_waistband_h", 48.0), 25.0, 95.0);
-    let waist_el_ratio = sclamp(param(vals, "jg_waist_elastic_ratio", 0.86), 0.50, 0.96);
+    let waist_el_ratio = sclamp(param(vals, "jg_waist_elastic_ratio", 0.80), 0.50, 0.96);
     let ankle_el_ratio = sclamp(param(vals, "jg_ankle_elastic_ratio", 0.78), 0.50, 0.96);
+    let ds_tail_len = sclamp(param(vals, "jg_drawstring_len", 190.0), 80.0, 320.0);
+    let ds_tighten = sclamp(param(vals, "jg_drawstring_tighten", 0.92), 0.70, 1.0);
 
     let hip = m.hip_mm.max(500.0);
     let q = (hip + hip_ease) / 4.0;
@@ -54,13 +58,12 @@ pub fn build(
     let f_fork = sclamp((hip + hip_ease) / 16.0, 30.0, 140.0);
     let b_fork = sclamp((hip + hip_ease) / 8.0 - 16.0, f_fork + 10.0, 220.0);
 
-    // Waistband finished half-length vs. gathered leg top.
-    let wb_half_len = sclamp((m.waist_mm + waist_ease * 0.45) / 2.0, 220.0, 900.0);
-    let f_waist_fin = wb_half_len * 0.48;
-    let b_waist_fin = wb_half_len * 0.52;
-    let gather_per_panel = waist_ease * 0.275;
-    let f_waist_len = f_waist_fin + gather_per_panel;
-    let b_waist_len = b_waist_fin + gather_per_panel;
+    // Relaxed ribbed waistband cut with negative ease (~88% of natural waist) so it hugs the body;
+    // leg top keeps full pull-on ease and gathers into the waistband.
+    let wb_half_len = sclamp((m.waist_mm * 0.88) / 2.0, 200.0, 900.0);
+    let leg_waist_half = sclamp((m.waist_mm + waist_ease) / 2.0, wb_half_len + 20.0, 960.0);
+    let f_waist_len = leg_waist_half * 0.48;
+    let b_waist_len = leg_waist_half * 0.52;
 
     let j_curve_ctrl = |fork: Point2, hip_pt: Point2, waist_pt: Point2, fork_handle: f64, dip: f64| {
         let d = hip_pt.sub(waist_pt).normalized();
@@ -79,8 +82,8 @@ pub fn build(
     let x_crease = 0.5 * (x_side + x_fork) - 4.0;
     let f_hem_half = sclamp(ankle_open / 4.0 - 6.0, 45.0, 0.5 * (x_fork - x_side) + 40.0);
     let x_cf_w = x_cf_hip - 8.0;
-    let y_cf_w = y_ws - 6.0;
-    let dx_fw = (f_waist_len * f_waist_len - 36.0).max(1.0).sqrt();
+    let y_cf_w = y_ws;
+    let dx_fw = (f_waist_len * f_waist_len - 4.0).max(1.0).sqrt();
     let x_sw = x_cf_w - dx_fw;
 
     let f_p0 = Point2::new(x_crease - f_hem_half, 0.0);
@@ -93,9 +96,6 @@ pub fn build(
 
     let hip_span_f = (f_p4.y - y_hip).max(20.0);
     let leg_span_f = (y_hip - y_knee).max(20.0);
-    let t_dir_f = Point2::new(f_p0.lerp(f_side_hip, y_knee / y_crotch).x, y_knee)
-        .sub(f_side_hip)
-        .normalized();
 
     let (f_j_c1, f_j_c2) = j_curve_ctrl(f_p2, f_hip_cf, f_p3, 0.5 * f_fork, 0.0);
     let front_edges = vec![
@@ -116,8 +116,8 @@ pub fn build(
         cubic(
             fe("outseam_hip"),
             f_p4,
-            f_p4.add(Point2::new(0.0, -0.4 * hip_span_f)),
-            f_side_hip.sub(t_dir_f.scale(0.4 * hip_span_f)),
+            f_p4.add(Point2::new(0.0, -0.35 * hip_span_f)),
+            f_side_hip.add(Point2::new(0.0, 0.45 * hip_span_f)),
             f_side_hip,
             12.0,
             MITER,
@@ -126,7 +126,7 @@ pub fn build(
         cubic(
             fe("outseam"),
             f_side_hip,
-            f_side_hip.add(t_dir_f.scale(0.45 * leg_span_f)),
+            f_side_hip.add(Point2::new(0.0, -0.35 * leg_span_f)),
             Point2::new(f_p0.lerp(f_side_hip, y_knee / y_crotch).x, y_knee),
             f_p0,
             12.0,
@@ -173,6 +173,10 @@ pub fn build(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FrontLeg,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // ============================ BACK LEG ============================
@@ -183,7 +187,7 @@ pub fn build(
     let x_crease_b = 0.5 * (x_side_b + x_fork_b) - 8.0;
     let b_hem_half = sclamp(ankle_open / 4.0 + 6.0, 50.0, 0.5 * (x_fork_b - x_side_b) + 40.0);
     let x_cb_w = x_cb_hip - 22.0;
-    let y_cb_w = y_ws + 18.0;
+    let y_cb_w = y_ws + 8.0;
     let dx_bw = (b_waist_len * b_waist_len - (y_cb_w - y_ws) * (y_cb_w - y_ws)).max(1.0).sqrt();
     let x_sw_b = x_cb_w - dx_bw;
 
@@ -197,9 +201,6 @@ pub fn build(
 
     let hip_span_b = (b_p4.y - y_hip).max(20.0);
     let leg_span_b = (y_hip - y_knee).max(20.0);
-    let t_dir_b = Point2::new(b_p0.lerp(b_side_hip, y_knee / y_crotch).x, y_knee)
-        .sub(b_side_hip)
-        .normalized();
     let (b_j_c1, b_j_c2) = j_curve_ctrl(b_p2, b_hip_cb, b_p3, 0.5 * b_fork, 4.0);
     let back_edges = vec![
         line(be("hem"), b_p0, b_p1, 10.0, MITER, "Back Hem"),
@@ -219,8 +220,8 @@ pub fn build(
         cubic(
             be("outseam_hip"),
             b_p4,
-            b_p4.add(Point2::new(0.0, -0.4 * hip_span_b)),
-            b_side_hip.sub(t_dir_b.scale(0.4 * hip_span_b)),
+            b_p4.add(Point2::new(0.0, -0.35 * hip_span_b)),
+            b_side_hip.add(Point2::new(0.0, 0.45 * hip_span_b)),
             b_side_hip,
             12.0,
             MITER,
@@ -229,7 +230,7 @@ pub fn build(
         cubic(
             be("outseam"),
             b_side_hip,
-            b_side_hip.add(t_dir_b.scale(0.45 * leg_span_b)),
+            b_side_hip.add(Point2::new(0.0, -0.35 * leg_span_b)),
             Point2::new(b_p0.lerp(b_side_hip, y_knee / y_crotch).x, y_knee),
             b_p0,
             12.0,
@@ -276,6 +277,10 @@ pub fn build(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::BackLeg,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // ============================ ELASTIC WAISTBAND (half, cut 2) ============================
@@ -288,7 +293,7 @@ pub fn build(
     let waist_el = Some(ElasticBandSpec {
         target_ratio: waist_el_ratio,
         width_mm: wb_h,
-        stiffness_n_m: 340.0,
+        stiffness_n_m: 1100.0,
     });
     let mut wb_seam_edge = line(we("seam"), w_p0, w_p1, 10.0, MITER, "Waistband Seam");
     wb_seam_edge.elastic = waist_el;
@@ -305,7 +310,7 @@ pub fn build(
         wb_top_edge,
         line(we("cf"), w_p3, w_p0, 10.0, MITER, "Center Front Seam"),
     ];
-    let wb_seam = wb_edges[0].id;
+    let (wb_seam, wb_top) = (wb_edges[0].id, wb_edges[2].id);
     let mut wb_loop = ClosedPolyCurve::from_edges(wb_edges);
     wb_loop.ensure_ccw();
     let waistband = PatternPiece {
@@ -329,6 +334,20 @@ pub fn build(
         visible: true,
         fabric_role: "Rib".into(),
         arrangement_zone: ArrangementZone::FlatCustom,
+        drawstrings: vec![DrawstringSpec {
+            id: id("waistband:drawstring"),
+            label: "Waist Drawstring".into(),
+            casing_edge_id: wb_top,
+            opposite_edge_id: Some(wb_seam),
+            tail_length_mm: ds_tail_len,
+            cord_radius_mm: 3.0,
+            eyelet_offset_mm: 20.0,
+            tighten_ratio: ds_tighten,
+            color_hex: "#ebe7de".into(),
+        }],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // ============================ ANKLE CUFF (cut 2) ============================
@@ -384,6 +403,10 @@ pub fn build(
         visible: true,
         fabric_role: "Rib".into(),
         arrangement_zone: ArrangementZone::FlatCustom,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     let (fid, bid, wid, cid) = (front.id, back.id, waistband.id, cuff.id);
@@ -434,7 +457,7 @@ pub fn build(
                 EaseSpec::EaseMm { mm: waist_ease_actual },
                 SeamType::Overlock,
                 -5.0,
-                200.0,
+                300.0,
             ),
             binding(
                 id("binding:ankle_cuff"),

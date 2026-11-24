@@ -343,6 +343,7 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   const [selfCollide, setSelfCollide] = useState(true);
   const [windOn, setWindOn] = useState(false);
   const [pinCount, setPinCount] = useState(0);
+  const [zipFraction, setZipFraction] = useState(1);
   const [webgpuActive, setWebgpuActive] = useState(false);
   const grabRef = useRef<{
     planePoint: [number, number, number];
@@ -539,25 +540,25 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       const b = kernel.getSim3dBuffers();
       clothIdxCount = b.clothIdx.length;
       if (full) {
-      avatarIdxCount = b.avatarIdx.length;
-      gl.bindVertexArray(avatarVao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, aPosBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, b.avatarPos, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+        avatarIdxCount = b.avatarIdx.length;
+        gl.bindVertexArray(avatarVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, aPosBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, b.avatarPos, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, aNormBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, b.avatarNorm, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, aNormBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, b.avatarNorm, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(1);
+        gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, aMaskBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, b.avatarMask, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(2);
-      gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, aMaskBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, b.avatarMask, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(2);
+        gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
 
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, aIdxBuf);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.avatarIdx, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, aIdxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.avatarIdx, gl.STATIC_DRAW);
       }
 
       const mode = useStudioStore.getState().sim3dViewMode;
@@ -996,9 +997,8 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
             }
             navRef.current.mode = 'none';
           }}
-          className={`w-full h-full block touch-none outline-none ${
-            grabMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
-          }`}
+          className={`w-full h-full block touch-none outline-none ${grabMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+            }`}
         />
       )}
 
@@ -1158,6 +1158,25 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
           <Hand className="w-3.5 h-3.5" />
           {t('v3d.grabMode')}
         </button>
+        {kernel.hasSim3dZipper() && (
+          <label className="flex items-center gap-1 px-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+            <span>{t('v3d.zipper')}</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(zipFraction * 100)}
+              onChange={(e) => {
+                const f = Number(e.target.value) / 100;
+                setZipFraction(f);
+                kernel.setSim3dZipper(f);
+                if (!playingRef.current) setPlaying(true);
+              }}
+              className="w-14"
+            />
+          </label>
+        )}
         {pinCount > 0 && (
           <button
             onClick={() => {
@@ -1204,7 +1223,6 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         className="pointer-events-none hidden xl:block absolute bottom-2 right-2 z-10 px-2 py-0.5 rounded text-[10px]"
         style={{ color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--bg-panel) 72%, transparent)' }}
       >
-        {t('v3d.navHint')}
       </div>
     </div>
   );

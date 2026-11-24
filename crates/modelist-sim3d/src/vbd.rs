@@ -25,11 +25,11 @@ const VBD_BEND_GAIN: f32 = 2.0;
 /// Spectral radius estimate for Chebyshev acceleration.
 const CHEBYSHEV_RHO: f32 = 0.85;
 /// Penalty stiffness for sewing / dart springs, N/m.
-const SEW_STIFFNESS: f32 = 400.0;
+const SEW_STIFFNESS: f32 = 2400.0;
 /// Penalty stiffness for user-placed pins, N/m.
 const PIN_STIFFNESS: f32 = 30000.0;
 /// Penalty stiffness for interactive 3D grab spring, N/m.
-const GRAB_STIFFNESS: f32 = 1800.0;
+const GRAB_STIFFNESS: f32 = 260.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VbdHinge {
@@ -40,6 +40,7 @@ pub(crate) struct VbdHinge {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GrabState {
     pub vert: usize,
+    pub origin: Vec3,
     pub target: Vec3,
     pub radius_m: f32,
 }
@@ -624,13 +625,18 @@ impl VbdSolverState {
             add_iso(&mut hess, PIN_STIFFNESS);
         }
 
-        // 6. Interactive 3D grab spring (Gaussian falloff over grab radius)
+        // 6. Interactive 3D grab spring (Gaussian falloff over grab radius, saturated pull)
         if let Some(grab) = self.grab {
             let d_grab = xi.sub(core.pos[grab.vert]).len();
             if d_grab <= grab.radius_m {
                 let r = grab.radius_m.max(1e-4);
                 let w = (-2.0 * (d_grab / r) * (d_grab / r)).exp();
-                let target_i = grab.target.add(xi.sub(core.pos[grab.vert]));
+                let mut pull = grab.target.sub(core.pos[grab.vert]);
+                let pull_len = pull.len();
+                if pull_len > 0.06 {
+                    pull = pull.scale(0.06 / pull_len);
+                }
+                let target_i = xi.add(pull);
                 let k = GRAB_STIFFNESS * w;
                 grad = grad.add(xi.sub(target_i).scale(k));
                 add_iso(&mut hess, k);

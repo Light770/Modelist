@@ -14,9 +14,10 @@
 
 use super::{binding, cubic, eref, line, notch, param, sclamp, t_at_y, var, MITER};
 use crate::model::{
-    det_id, ArrangementZone, BodyMeasurements, ClosedPolyCurve, CornerRule, DartCapStyle,
-    DartEntity, DartFoldDir, EaseSpec, EaseTable, GrainRotationMode, GrainlineSpec,
-    InternalLine, NotchStyle, ParametricVar, PatternPiece, Point2, SeamType, StitchingGraph,
+    det_id, ArrangementZone, BeltLoopSpec, BodyMeasurements, ButtonSpec, ClosedPolyCurve,
+    CornerRule, DartCapStyle, DartEntity, DartFoldDir, EaseSpec, EaseTable, GrainRotationMode,
+    GrainlineSpec, InternalLine, NotchStyle, ParametricVar, PatternPiece, Point2, SeamType,
+    StitchingGraph, ZipperSpec,
 };
 use std::collections::HashMap;
 
@@ -324,7 +325,7 @@ pub fn build(
         NotchStyle::Slit,
         1,
     ));
-    let (f_in, f_waist) = (front_edges[1].id, front_edges[4].id);
+    let (f_in, f_cf, f_waist) = (front_edges[1].id, front_edges[3].id, front_edges[4].id);
     let (f_out_h, f_out) = (front_edges[5].id, front_edges[6].id);
     let mut front_loop = ClosedPolyCurve::from_edges(front_edges);
     front_loop.ensure_ccw();
@@ -349,6 +350,17 @@ pub fn build(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FrontLeg,
+        drawstrings: vec![],
+        zippers: vec![ZipperSpec {
+            id: id("front:zipper:fly"),
+            label: "Front Fly Zipper".into(),
+            edge_id: f_cf,
+            zip_fraction: 1.0,
+            teeth_width_mm: 5.0,
+            color_hex: "#b5b8be".into(),
+        }],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // ============================ BACK LEG ============================
@@ -488,6 +500,10 @@ pub fn build(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::BackLeg,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // ============================ WAISTBAND (half, cut 2, folded) ============================
@@ -515,7 +531,7 @@ pub fn build(
         NotchStyle::Slit,
         1,
     )];
-    let wb_seam = wb_edges[1].id;
+    let (wb_seam, wb_facing) = (wb_edges[1].id, wb_edges[3].id);
     let mut wb_loop = ClosedPolyCurve::from_edges(wb_edges);
     wb_loop.ensure_ccw();
     let waistband = PatternPiece {
@@ -547,6 +563,25 @@ pub fn build(
         visible: true,
         fabric_role: "Shell (interfaced)".into(),
         arrangement_zone: ArrangementZone::FlatCustom,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![ButtonSpec {
+            id: id("waistband:button:front"),
+            label: "Waistband Button".into(),
+            edge_id: wb_seam,
+            param_t: 0.04,
+            diameter_mm: 16.0,
+            color_hex: "#38332e".into(),
+        }],
+        belt_loops: vec![BeltLoopSpec {
+            id: id("waistband:belt_loops"),
+            label: "Belt Loops".into(),
+            base_edge_id: wb_seam,
+            top_edge_id: Some(wb_facing),
+            positions_t: vec![0.18, 0.52, 0.92],
+            width_mm: 11.0,
+            arch_mm: 5.5,
+        }],
     };
 
     let (fid, bid, wid) = (front.id, back.id, waistband.id);

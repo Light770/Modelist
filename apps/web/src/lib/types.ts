@@ -164,6 +164,46 @@ export interface ElasticBandSpec {
   stiffness_n_m: number;
 }
 
+export interface DrawstringSpec {
+  id: string;
+  label: string;
+  casing_edge_id: string;
+  opposite_edge_id?: string | null;
+  tail_length_mm: number;
+  cord_radius_mm: number;
+  eyelet_offset_mm: number;
+  tighten_ratio: number;
+  color_hex: string;
+}
+
+export interface ZipperSpec {
+  id: string;
+  label: string;
+  edge_id: string;
+  zip_fraction: number;
+  teeth_width_mm: number;
+  color_hex: string;
+}
+
+export interface ButtonSpec {
+  id: string;
+  label: string;
+  edge_id: string;
+  param_t: number;
+  diameter_mm: number;
+  color_hex: string;
+}
+
+export interface BeltLoopSpec {
+  id: string;
+  label: string;
+  base_edge_id: string;
+  top_edge_id?: string | null;
+  positions_t: number[];
+  width_mm: number;
+  arch_mm: number;
+}
+
 export interface EdgeInfo {
   edge_idx: number;
   edge_id: string;
@@ -175,6 +215,10 @@ export interface EdgeInfo {
   is_fold: boolean;
   hem?: HemSpec | null;
   elastic?: ElasticBandSpec | null;
+  drawstring?: DrawstringSpec | null;
+  zipper?: ZipperSpec | null;
+  button?: ButtonSpec | null;
+  belt_loop?: BeltLoopSpec | null;
 }
 
 export interface DartInfo {

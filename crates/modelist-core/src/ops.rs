@@ -201,6 +201,56 @@ pub fn apply_ops_to_piece(piece: &mut PatternPiece, ops: &[ParametricOp]) {
                     }
                 }
             }
+            ParametricOp::SetEdgeDrawstring {
+                piece_id,
+                edge_idx,
+                drawstring,
+                ..
+            } if *piece_id == piece.id => {
+                let n_edges = piece.seam_loop.edges.len();
+                if let Some(edge) = piece.seam_loop.edges.get(*edge_idx) {
+                    let edge_id = edge.id;
+                    piece.drawstrings.retain(|d| d.casing_edge_id != edge_id);
+                    if let Some(mut ds) = drawstring.clone() {
+                        ds.casing_edge_id = edge_id;
+                        if ds.opposite_edge_id.is_none() && n_edges == 4 {
+                            ds.opposite_edge_id = Some(piece.seam_loop.edges[(*edge_idx + 2) % 4].id);
+                        }
+                        piece.drawstrings.push(ds);
+                    }
+                }
+            }
+            ParametricOp::SetEdgeHardware {
+                piece_id,
+                edge_idx,
+                zipper,
+                button,
+                belt_loop,
+                ..
+            } if *piece_id == piece.id => {
+                let n_edges = piece.seam_loop.edges.len();
+                if let Some(edge) = piece.seam_loop.edges.get(*edge_idx) {
+                    let edge_id = edge.id;
+                    piece.zippers.retain(|z| z.edge_id != edge_id);
+                    if let Some(mut z) = zipper.clone() {
+                        z.edge_id = edge_id;
+                        piece.zippers.push(z);
+                    }
+                    piece.buttons.retain(|b| b.edge_id != edge_id);
+                    if let Some(mut b) = button.clone() {
+                        b.edge_id = edge_id;
+                        piece.buttons.push(b);
+                    }
+                    piece.belt_loops.retain(|bl| bl.base_edge_id != edge_id);
+                    if let Some(mut bl) = belt_loop.clone() {
+                        bl.base_edge_id = edge_id;
+                        if bl.top_edge_id.is_none() && n_edges >= 4 {
+                            bl.top_edge_id = Some(piece.seam_loop.edges[(*edge_idx + 2) % n_edges].id);
+                        }
+                        piece.belt_loops.push(bl);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -424,6 +474,10 @@ pub fn make_rect_pattern_piece(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: crate::model::ArrangementZone::FlatCustom,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     }
 }
 

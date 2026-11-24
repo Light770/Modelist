@@ -247,6 +247,10 @@ pub fn build(
             } else {
                 ArrangementZone::BackTorso
             },
+            drawstrings: vec![],
+            zippers: vec![],
+            buttons: vec![],
+            belt_loops: vec![],
         };
         (piece, ids)
     };
@@ -354,6 +358,10 @@ pub fn build(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::SleeveLeft,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // --- Neck rib: half length (CF fold to CB seam), cut double height and folded ---
@@ -406,6 +414,10 @@ pub fn build(
         visible: true,
         fabric_role: "Rib".into(),
         arrangement_zone: ArrangementZone::FlatCustom,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     let (fid, bid, sid, rid) = (front.id, back.id, sleeve.id, rib.id);

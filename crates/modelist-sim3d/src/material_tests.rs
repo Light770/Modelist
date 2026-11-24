@@ -54,6 +54,10 @@ pub(crate) fn rect_piece(w: f64, h: f64, grain_deg: f64) -> PatternPiece {
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FlatCustom,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     }
 }
 

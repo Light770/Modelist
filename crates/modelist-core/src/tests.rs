@@ -108,6 +108,10 @@ mod tests {
             visible: true,
             fabric_role: "Shell".into(),
             arrangement_zone: ArrangementZone::FlatCustom,
+            drawstrings: vec![],
+            zippers: vec![],
+            buttons: vec![],
+            belt_loops: vec![],
         }
     }
 

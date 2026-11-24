@@ -499,6 +499,10 @@ pub fn import_dxf_aama(dxf_text: &str) -> Result<Vec<PatternPiece>, String> {
             visible: true,
             fabric_role: "Imported".into(),
             arrangement_zone: ArrangementZone::FlatCustom,
+            drawstrings: vec![],
+            zippers: vec![],
+            buttons: vec![],
+            belt_loops: vec![],
         });
     }
 
@@ -1383,6 +1387,10 @@ pub fn import_garmentcode_json(
             visible: true,
             fabric_role: "GarmentCode".into(),
             arrangement_zone: zone,
+            drawstrings: vec![],
+            zippers: vec![],
+            buttons: vec![],
+            belt_loops: vec![],
         });
 
         cursor_x += (max_x - min_x) + 110.0;

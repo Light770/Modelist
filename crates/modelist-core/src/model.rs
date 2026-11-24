@@ -196,6 +196,60 @@ pub struct ElasticBandSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrawstringSpec {
+    pub id: Uuid,
+    pub label: String,
+    /// Edge along which the drawstring casing runs (e.g. Waistband Top or Hood Front).
+    pub casing_edge_id: Uuid,
+    /// Optional opposite edge of the casing strip (e.g. Waistband Seam) so eyelets sit
+    /// centered in the band height.
+    #[serde(default)]
+    pub opposite_edge_id: Option<Uuid>,
+    /// Hanging cord tail length emerging from each eyelet, in mm (e.g. 160–240 mm).
+    pub tail_length_mm: f64,
+    /// Cord cross-section radius in mm (e.g. 2.5–4.0 mm).
+    pub cord_radius_mm: f64,
+    /// Eyelet offset from Center Front along the casing, in mm (e.g. 18–25 mm).
+    pub eyelet_offset_mm: f64,
+    /// Default tightening ratio (0.65..1.0; 1.0 = relaxed, < 1.0 = cinched).
+    pub tighten_ratio: f64,
+    /// Cord colour hex string (e.g. "#ebe7de").
+    pub color_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ZipperSpec {
+    pub id: Uuid,
+    pub label: String,
+    pub edge_id: Uuid,
+    pub zip_fraction: f64,
+    pub teeth_width_mm: f64,
+    pub color_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ButtonSpec {
+    pub id: Uuid,
+    pub label: String,
+    pub edge_id: Uuid,
+    pub param_t: f64,
+    pub diameter_mm: f64,
+    pub color_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BeltLoopSpec {
+    pub id: Uuid,
+    pub label: String,
+    pub base_edge_id: Uuid,
+    #[serde(default)]
+    pub top_edge_id: Option<Uuid>,
+    pub positions_t: Vec<f64>,
+    pub width_mm: f64,
+    pub arch_mm: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolyEdge {
     pub id: Uuid,
     pub start: Point2,
@@ -498,6 +552,14 @@ pub struct PatternPiece {
     pub fabric_role: String,
     #[serde(default)]
     pub arrangement_zone: ArrangementZone,
+    #[serde(default)]
+    pub drawstrings: Vec<DrawstringSpec>,
+    #[serde(default)]
+    pub zippers: Vec<ZipperSpec>,
+    #[serde(default)]
+    pub buttons: Vec<ButtonSpec>,
+    #[serde(default)]
+    pub belt_loops: Vec<BeltLoopSpec>,
 }
 
 /// Deterministic UUID-based edge reference inside a SeamInterface.
@@ -1551,6 +1613,20 @@ pub enum ParametricOp {
         hem: Option<HemSpec>,
         elastic: Option<ElasticBandSpec>,
     },
+    SetEdgeDrawstring {
+        id: Uuid,
+        piece_id: Uuid,
+        edge_idx: usize,
+        drawstring: Option<DrawstringSpec>,
+    },
+    SetEdgeHardware {
+        id: Uuid,
+        piece_id: Uuid,
+        edge_idx: usize,
+        zipper: Option<ZipperSpec>,
+        button: Option<ButtonSpec>,
+        belt_loop: Option<BeltLoopSpec>,
+    },
 }
 
 impl ParametricOp {
@@ -1575,7 +1651,9 @@ impl ParametricOp {
             | Self::SplitEdgePoint { id, .. }
             | Self::SetEdgeLength { id, .. }
             | Self::MirrorPiece { id, .. }
-            | Self::SetEdgeFinish { id, .. } => id,
+            | Self::SetEdgeFinish { id, .. }
+            | Self::SetEdgeDrawstring { id, .. }
+            | Self::SetEdgeHardware { id, .. } => id,
         }
     }
 
@@ -1649,6 +1727,20 @@ impl ParametricOp {
                     }
                 )
             }
+            Self::SetEdgeDrawstring { edge_idx, drawstring, .. } => {
+                format!(
+                    "Edge #{edge_idx} Drawstring ({})",
+                    if drawstring.is_some() { "Active" } else { "Removed" }
+                )
+            }
+            Self::SetEdgeHardware { edge_idx, zipper, button, belt_loop, .. } => {
+                format!(
+                    "Edge #{edge_idx} Hardware (Z:{} B:{} L:{})",
+                    if zipper.is_some() { "1" } else { "0" },
+                    if button.is_some() { "1" } else { "0" },
+                    if belt_loop.is_some() { "1" } else { "0" },
+                )
+            }
         }
     }
 
@@ -1674,6 +1766,8 @@ impl ParametricOp {
             Self::SetEdgeLength { .. } => "set_edge_length",
             Self::MirrorPiece { .. } => "mirror_piece",
             Self::SetEdgeFinish { .. } => "set_edge_finish",
+            Self::SetEdgeDrawstring { .. } => "set_edge_drawstring",
+            Self::SetEdgeHardware { .. } => "set_edge_hardware",
         }
     }
 
@@ -1694,7 +1788,9 @@ impl ParametricOp {
             | Self::SplitEdgePoint { piece_id, .. }
             | Self::SetEdgeLength { piece_id, .. }
             | Self::MirrorPiece { piece_id, .. }
-            | Self::SetEdgeFinish { piece_id, .. } => vec![*piece_id],
+            | Self::SetEdgeFinish { piece_id, .. }
+            | Self::SetEdgeDrawstring { piece_id, .. }
+            | Self::SetEdgeHardware { piece_id, .. } => vec![*piece_id],
             Self::AddSeamBinding { binding, .. } | Self::ReplaceSeamBinding { binding, .. } => {
                 let mut ids = Vec::new();
                 for er in binding
@@ -1766,6 +1862,18 @@ pub fn remap_entity_ids(
         for l in p.internal_lines.iter_mut() {
             l.id = fresh(&mut map, l.id);
         }
+        for ds in p.drawstrings.iter_mut() {
+            ds.id = fresh(&mut map, ds.id);
+        }
+        for z in p.zippers.iter_mut() {
+            z.id = fresh(&mut map, z.id);
+        }
+        for b in p.buttons.iter_mut() {
+            b.id = fresh(&mut map, b.id);
+        }
+        for bl in p.belt_loops.iter_mut() {
+            bl.id = fresh(&mut map, bl.id);
+        }
     }
     // Second pass: links inside the group (edge ids are all mapped by now).
     let relink = |id: &mut Uuid| {
@@ -1781,6 +1889,24 @@ pub fn remap_entity_ids(
         }
         for n in p.notches.iter_mut() {
             if let Some(e) = n.edge_id.as_mut() {
+                relink(e);
+            }
+        }
+        for ds in p.drawstrings.iter_mut() {
+            relink(&mut ds.casing_edge_id);
+            if let Some(e) = ds.opposite_edge_id.as_mut() {
+                relink(e);
+            }
+        }
+        for z in p.zippers.iter_mut() {
+            relink(&mut z.edge_id);
+        }
+        for b in p.buttons.iter_mut() {
+            relink(&mut b.edge_id);
+        }
+        for bl in p.belt_loops.iter_mut() {
+            relink(&mut bl.base_edge_id);
+            if let Some(e) = bl.top_edge_id.as_mut() {
                 relink(e);
             }
         }

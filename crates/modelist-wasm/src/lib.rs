@@ -56,6 +56,10 @@ struct EdgeInfo {
     is_fold: bool,
     hem: Option<modelist_core::model::HemSpec>,
     elastic: Option<modelist_core::model::ElasticBandSpec>,
+    drawstring: Option<modelist_core::model::DrawstringSpec>,
+    zipper: Option<modelist_core::model::ZipperSpec>,
+    button: Option<modelist_core::model::ButtonSpec>,
+    belt_loop: Option<modelist_core::model::BeltLoopSpec>,
 }
 
 #[derive(Serialize)]
@@ -1099,6 +1103,58 @@ impl ModelistSession {
         self.recompute();
     }
 
+    pub fn set_edge_drawstring(
+        &mut self,
+        piece_id: &str,
+        edge_idx: usize,
+        drawstring_json: &str,
+    ) {
+        let Ok(pid) = Uuid::parse_str(piece_id) else {
+            return;
+        };
+        let drawstring: Option<modelist_core::model::DrawstringSpec> =
+            serde_json::from_str(drawstring_json).unwrap_or(None);
+        self.push_undo();
+        let id = self.next_op_id("set_drawstring");
+        self.insert_op(ParametricOp::SetEdgeDrawstring {
+            id,
+            piece_id: pid,
+            edge_idx,
+            drawstring,
+        });
+        self.recompute();
+    }
+
+    pub fn set_edge_hardware(
+        &mut self,
+        piece_id: &str,
+        edge_idx: usize,
+        zipper_json: &str,
+        button_json: &str,
+        belt_loop_json: &str,
+    ) {
+        let Ok(pid) = Uuid::parse_str(piece_id) else {
+            return;
+        };
+        let zipper: Option<modelist_core::model::ZipperSpec> =
+            serde_json::from_str(zipper_json).unwrap_or(None);
+        let button: Option<modelist_core::model::ButtonSpec> =
+            serde_json::from_str(button_json).unwrap_or(None);
+        let belt_loop: Option<modelist_core::model::BeltLoopSpec> =
+            serde_json::from_str(belt_loop_json).unwrap_or(None);
+        self.push_undo();
+        let id = self.next_op_id("set_hardware");
+        self.insert_op(ParametricOp::SetEdgeHardware {
+            id,
+            piece_id: pid,
+            edge_idx,
+            zipper,
+            button,
+            belt_loop,
+        });
+        self.recompute();
+    }
+
     pub fn add_notch(
         &mut self,
         piece_id: &str,
@@ -1585,6 +1641,19 @@ impl ModelistSession {
         }
     }
 
+    pub fn set_sim3d_zipper(&mut self, fraction: f32) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.set_zipper_fraction(fraction);
+        }
+    }
+
+    pub fn get_sim3d_has_zipper(&self) -> bool {
+        self.sim3d
+            .as_ref()
+            .map(|s| s.hardware_counts().0 > 0)
+            .unwrap_or(false)
+    }
+
     pub fn pick_sim3d_vertex(
         &self,
         ox: f32,
@@ -1859,6 +1928,18 @@ impl ModelistSession {
                         is_fold: p.mirror_fold_edge == Some(ei),
                         hem: e.hem,
                         elastic: e.elastic,
+                        drawstring: p
+                            .drawstrings
+                            .iter()
+                            .find(|d| d.casing_edge_id == e.id)
+                            .cloned(),
+                        zipper: p.zippers.iter().find(|z| z.edge_id == e.id).cloned(),
+                        button: p.buttons.iter().find(|b| b.edge_id == e.id).cloned(),
+                        belt_loop: p
+                            .belt_loops
+                            .iter()
+                            .find(|bl| bl.base_edge_id == e.id)
+                            .cloned(),
                     })
                     .collect();
                 let darts = p

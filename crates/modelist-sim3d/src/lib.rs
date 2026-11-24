@@ -5,6 +5,7 @@ pub mod closures;
 pub(crate) mod collide;
 pub mod cosserat;
 pub mod diagnostics;
+pub mod drawstring;
 pub mod mannequin_data;
 pub mod material;
 #[cfg(test)]
@@ -403,7 +404,36 @@ mod tests {
             + (grabbed[2] - orig[2]).powi(2))
         .sqrt();
         assert!(moved > 0.015, "Grab did not pull vertex enough: {moved:.4} m");
+
+        // Aggressive grab stress: drag 0.80 m sideways, across torso, and into torso center;
+        // seams must not tear, cloth must stay bounded, and body poke-through must remain zero.
+        sim.move_grab([orig[0] + 0.80, orig[1], orig[2]]);
+        sim.step(15);
+        sim.move_grab([orig[0] - 0.80, orig[1], orig[2]]);
+        sim.step(15);
+        sim.move_grab([0.0, sim.avatar.waist_y + 0.05, 0.0]);
+        sim.step(15);
+        let dragged = [
+            sim.flat_positions[target_v * 3],
+            sim.flat_positions[target_v * 3 + 1],
+            sim.flat_positions[target_v * 3 + 2],
+        ];
         sim.end_grab();
+
+        let drag_dist = ((dragged[0] - orig[0]).powi(2)
+            + (dragged[1] - orig[1]).powi(2)
+            + (dragged[2] - orig[2]).powi(2))
+        .sqrt();
+        assert!(drag_dist < 0.28, "Grab pulled vertex too far from origin: {drag_dist:.3} m");
+        let (_avg_gap, max_gap_mm) = sim.seam_gap_stats_mm();
+        assert!(max_gap_mm < 0.1, "Aggressive grab tore a seam: max_gap={max_gap_mm:.3} mm");
+        let max_abs = sim.flat_positions.iter().copied().fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(
+            sim.flat_positions.iter().all(|&v| v.is_finite()) && max_abs <= 2.2,
+            "Aggressive grab pushed cloth out of bounds: max_abs={max_abs:.3}"
+        );
+        let q = sim.drape_quality();
+        assert_eq!(q.poke_through_count, 0, "Aggressive grab clipped cloth into body: {q:?}");
     }
 
     #[test]
@@ -695,14 +725,45 @@ mod tests {
         let motion = sim.stats().motion_mm_s;
         let p99_motion = sim.p99_motion_mm_s();
         let max_motion = sim.max_motion_mm_s();
+        let (w_cur, _w_rest) = sim.waist_length_mm();
+        let avg_waist_circ = w_cur / 3.0;
+        let rings = sim.elastic_ring_fit_stats();
+        let y_spans = sim.elastic_ring_y_span_mm();
         println!(
-            "[jogger_pants] avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm elastic={el_cur_mm:.1}/{el_orig_mm:.1}mm motion={motion:.2}mm/s p99={p99_motion:.2}mm/s max={max_motion:.2}mm/s {q:?}"
+            "[jogger_pants] avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm elastic={el_cur_mm:.1}/{el_orig_mm:.1}mm avg_waist={avg_waist_circ:.1}/{:.1}mm rings={rings:?} y_spans={y_spans:?} motion={motion:.2}mm/s p99={p99_motion:.2}mm/s max={max_motion:.2}mm/s {q:?}",
+            sim.avatar.measured.waist_mm
         );
         assert!(el_orig_mm > 500.0, "expected active elastic bands on jogger_pants");
+        assert!(rings.len() >= 4, "expected >= 4 closed elastic rings, got {}", rings.len());
+        let waist_rings: Vec<(usize, (f32, f32, f32, f32))> = rings
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, r)| r.0 > 500.0)
+            .collect();
+        assert!(!waist_rings.is_empty(), "expected waistband elastic rings, got {rings:?}");
+        let min_waist_circ = waist_rings.iter().map(|(_, r)| r.0).fold(f32::INFINITY, f32::min);
         assert!(
-            el_cur_mm < el_orig_mm * 0.99,
-            "elastic bands did not contract enough: {el_cur_mm:.1} vs {el_orig_mm:.1} mm"
+            min_waist_circ <= sim.avatar.measured.waist_mm + 40.0,
+            "jogger_pants top waistband ring dangling ({min_waist_circ:.1} vs body {:.1} mm), rings={rings:?}",
+            sim.avatar.measured.waist_mm
         );
+        for &(ri, (_cur_circ_mm, _target_circ_mm, mean_clear_mm, max_clear_mm)) in &waist_rings {
+            assert!(
+                mean_clear_mm < 10.0,
+                "jogger_pants waistband mean clearance too large ({mean_clear_mm:.2} mm), rings={rings:?}"
+            );
+            assert!(
+                max_clear_mm < 14.0,
+                "jogger_pants waistband max clearance too large ({max_clear_mm:.2} mm), rings={rings:?}"
+            );
+            assert!(
+                y_spans[ri] < 18.0,
+                "jogger_pants waistband ring not straight/level (y_span={:.2} mm), y_spans={y_spans:?}",
+                y_spans[ri]
+            );
+        }
+        assert_eq!(sim.drawstring_count(), 1, "expected 1 waist drawstring on jogger_pants");
         assert!(max_gap_mm < 0.05, "jogger_pants seam gap {max_gap_mm:.3} mm");
         assert!(sim.max_weld_spread_mm() < 0.05);
         assert!(q.sharp_crease_pct < 3.0, "jogger_pants sharp_crease_pct {q:?}");
@@ -712,6 +773,21 @@ mod tests {
         let r_verts = sim.render_positions().len() / 3;
         assert!(sim.render_positions().len() > sim.flat_positions.len() * 2);
         assert!(sim.render_indices().iter().all(|&idx| (idx as usize) < r_verts));
+        assert!(sim.render_positions().iter().all(|v| v.is_finite()));
+        assert!(sim.render_normals().iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn test_wide_pleat_trouser_zipper_button_and_belt_loops() {
+        let mut sim = drape("wide_pleat_trouser", "wool_suiting", 120);
+        assert_eq!(sim.hardware_counts(), (1, 1, 1));
+        let r_verts = sim.render_positions().len() / 3;
+        assert!(sim.render_indices().iter().all(|&idx| (idx as usize) < r_verts));
+        assert!(sim.render_positions().iter().all(|v| v.is_finite()));
+        assert!(sim.render_normals().iter().all(|v| v.is_finite()));
+
+        sim.set_zipper_fraction(0.25);
+        sim.step(20);
         assert!(sim.render_positions().iter().all(|v| v.is_finite()));
         assert!(sim.render_normals().iter().all(|v| v.is_finite()));
     }

@@ -638,8 +638,8 @@ fn place_leg(
             let theta = if is_front { side * theta_p } else { PI - side * theta_p };
             let ang = FRAC_PI_2 - theta;
             let (sx, sz) = avatar.torso_surface_xz(yc, ang);
-            let pelv_x = sx + side * 0.022 * theta_p.sin();
-            let pelv_z = sz + z_sign * 0.022 * theta_p.cos();
+            let pelv_x = sx + side * 0.015 * theta_p.sin();
+            let pelv_z = sz + z_sign * 0.015 * theta_p.cos();
             let sb = pelvis_blend * pelvis_blend * (3.0 - 2.0 * pelvis_blend);
             Vec3::new(leg_x + (pelv_x - leg_x) * sb, y, leg_z + (pelv_z - leg_z) * sb)
         })

@@ -560,6 +560,344 @@ export const RightInspector: React.FC<{ view: PanelPage }> = ({ view }) => {
                     </div>
                   )}
                 </div>
+
+                {/* Drawstring & Eyelets */}
+                <div className="pt-1 border-t space-y-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <label className="flex items-center justify-between text-[11px] cursor-pointer">
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('inspector.drawstringLabel')}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedEdge.drawstring)}
+                      onChange={(e) => {
+                        const nextDs = e.target.checked
+                          ? {
+                              id: selectedEdge.edge_id,
+                              label: `${selectedEdge.label} Drawstring`,
+                              casing_edge_id: selectedEdge.edge_id,
+                              opposite_edge_id: null,
+                              tail_length_mm: 190,
+                              cord_radius_mm: 3.0,
+                              eyelet_offset_mm: 20,
+                              tighten_ratio: 0.92,
+                              color_hex: '#ebe7de',
+                            }
+                          : null;
+                        setSnapshot(
+                          kernel.setEdgeDrawstring(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            nextDs,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  {selectedEdge.drawstring && (
+                    <div className="space-y-1.5 text-[10px]">
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                          {t('inspector.drawstringCinch')}
+                        </span>
+                        <input
+                          type="range"
+                          min={70}
+                          max={100}
+                          step={1}
+                          value={Math.round(selectedEdge.drawstring.tighten_ratio * 100)}
+                          onChange={(e) => {
+                            if (!selectedEdge.drawstring) return;
+                            setSnapshot(
+                              kernel.setEdgeDrawstring(selectedPiece.id, selectedEdge.edge_idx, {
+                                ...selectedEdge.drawstring,
+                                tighten_ratio: Number(e.target.value) / 100,
+                              }),
+                            );
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="font-mono-num w-8 text-right">
+                          {Math.round(selectedEdge.drawstring.tighten_ratio * 100)}%
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                          {t('inspector.drawstringTailLen')}
+                        </span>
+                        <input
+                          type="range"
+                          min={80}
+                          max={320}
+                          step={5}
+                          value={Math.round(selectedEdge.drawstring.tail_length_mm)}
+                          onChange={(e) => {
+                            if (!selectedEdge.drawstring) return;
+                            setSnapshot(
+                              kernel.setEdgeDrawstring(selectedPiece.id, selectedEdge.edge_idx, {
+                                ...selectedEdge.drawstring,
+                                tail_length_mm: Number(e.target.value),
+                              }),
+                            );
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="font-mono-num w-9 text-right">
+                          {Math.round(selectedEdge.drawstring.tail_length_mm)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                          {t('inspector.drawstringRadius')}
+                        </span>
+                        <input
+                          type="range"
+                          min={1.5}
+                          max={5.0}
+                          step={0.5}
+                          value={selectedEdge.drawstring.cord_radius_mm}
+                          onChange={(e) => {
+                            if (!selectedEdge.drawstring) return;
+                            setSnapshot(
+                              kernel.setEdgeDrawstring(selectedPiece.id, selectedEdge.edge_idx, {
+                                ...selectedEdge.drawstring,
+                                cord_radius_mm: Number(e.target.value),
+                              }),
+                            );
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="font-mono-num w-8 text-right">
+                          {selectedEdge.drawstring.cord_radius_mm.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                          {t('inspector.drawstringEyeletOffset')}
+                        </span>
+                        <input
+                          type="range"
+                          min={10}
+                          max={40}
+                          step={1}
+                          value={Math.round(selectedEdge.drawstring.eyelet_offset_mm)}
+                          onChange={(e) => {
+                            if (!selectedEdge.drawstring) return;
+                            setSnapshot(
+                              kernel.setEdgeDrawstring(selectedPiece.id, selectedEdge.edge_idx, {
+                                ...selectedEdge.drawstring,
+                                eyelet_offset_mm: Number(e.target.value),
+                              }),
+                            );
+                          }}
+                          className="flex-1"
+                        />
+                        <span className="font-mono-num w-8 text-right">
+                          {Math.round(selectedEdge.drawstring.eyelet_offset_mm)}
+                        </span>
+                      </div>
+                      <label className="flex items-center justify-between">
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {t('inspector.drawstringColor')}
+                        </span>
+                        <input
+                          type="color"
+                          value={selectedEdge.drawstring.color_hex}
+                          onChange={(e) => {
+                            if (!selectedEdge.drawstring) return;
+                            setSnapshot(
+                              kernel.setEdgeDrawstring(selectedPiece.id, selectedEdge.edge_idx, {
+                                ...selectedEdge.drawstring,
+                                color_hex: e.target.value,
+                              }),
+                            );
+                          }}
+                          className="w-6 h-5 p-0 border-0 bg-transparent cursor-pointer"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Hardware: Zipper, Button, Belt Loops */}
+                <div className="pt-1 border-t space-y-1.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <label className="flex items-center justify-between text-[11px] cursor-pointer">
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('inspector.zipperLabel')}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedEdge.zipper)}
+                      onChange={(e) => {
+                        const nextZ = e.target.checked
+                          ? {
+                              id: selectedEdge.edge_id,
+                              label: `${selectedEdge.label} Zipper`,
+                              edge_id: selectedEdge.edge_id,
+                              zip_fraction: 1.0,
+                              teeth_width_mm: 5.0,
+                              color_hex: '#b5b8be',
+                            }
+                          : null;
+                        setSnapshot(
+                          kernel.setEdgeHardware(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            nextZ,
+                            selectedEdge.button ?? null,
+                            selectedEdge.belt_loop ?? null,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  {selectedEdge.zipper && (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                        {t('inspector.zipperFraction')}
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.round(selectedEdge.zipper.zip_fraction * 100)}
+                        onChange={(e) => {
+                          if (!selectedEdge.zipper) return;
+                          const frac = Number(e.target.value) / 100;
+                          setSnapshot(
+                            kernel.setEdgeHardware(
+                              selectedPiece.id,
+                              selectedEdge.edge_idx,
+                              { ...selectedEdge.zipper, zip_fraction: frac },
+                              selectedEdge.button ?? null,
+                              selectedEdge.belt_loop ?? null,
+                            ),
+                          );
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="font-mono-num w-8 text-right">
+                        {Math.round(selectedEdge.zipper.zip_fraction * 100)}%
+                      </span>
+                    </div>
+                  )}
+
+                  <label className="flex items-center justify-between text-[11px] cursor-pointer">
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('inspector.buttonLabel')}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedEdge.button)}
+                      onChange={(e) => {
+                        const nextB = e.target.checked
+                          ? {
+                              id: selectedEdge.edge_id,
+                              label: `${selectedEdge.label} Button`,
+                              edge_id: selectedEdge.edge_id,
+                              param_t: 0.1,
+                              diameter_mm: 16.0,
+                              color_hex: '#38332e',
+                            }
+                          : null;
+                        setSnapshot(
+                          kernel.setEdgeHardware(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            selectedEdge.zipper ?? null,
+                            nextB,
+                            selectedEdge.belt_loop ?? null,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  {selectedEdge.button && (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                        {t('inspector.buttonDiameter')}
+                      </span>
+                      <input
+                        type="range"
+                        min={10}
+                        max={30}
+                        step={1}
+                        value={Math.round(selectedEdge.button.diameter_mm)}
+                        onChange={(e) => {
+                          if (!selectedEdge.button) return;
+                          setSnapshot(
+                            kernel.setEdgeHardware(
+                              selectedPiece.id,
+                              selectedEdge.edge_idx,
+                              selectedEdge.zipper ?? null,
+                              { ...selectedEdge.button, diameter_mm: Number(e.target.value) },
+                              selectedEdge.belt_loop ?? null,
+                            ),
+                          );
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="font-mono-num w-8 text-right">
+                        {Math.round(selectedEdge.button.diameter_mm)}
+                      </span>
+                    </div>
+                  )}
+
+                  <label className="flex items-center justify-between text-[11px] cursor-pointer">
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('inspector.beltLoopLabel')}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedEdge.belt_loop)}
+                      onChange={(e) => {
+                        const nextL = e.target.checked
+                          ? {
+                              id: selectedEdge.edge_id,
+                              label: `${selectedEdge.label} Belt Loops`,
+                              base_edge_id: selectedEdge.edge_id,
+                              top_edge_id: null,
+                              positions_t: [0.2, 0.5, 0.85],
+                              width_mm: 11.0,
+                              arch_mm: 5.5,
+                            }
+                          : null;
+                        setSnapshot(
+                          kernel.setEdgeHardware(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            selectedEdge.zipper ?? null,
+                            selectedEdge.button ?? null,
+                            nextL,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  {selectedEdge.belt_loop && (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                        {t('inspector.beltLoopArch')}
+                      </span>
+                      <input
+                        type="range"
+                        min={2}
+                        max={12}
+                        step={0.5}
+                        value={selectedEdge.belt_loop.arch_mm}
+                        onChange={(e) => {
+                          if (!selectedEdge.belt_loop) return;
+                          setSnapshot(
+                            kernel.setEdgeHardware(
+                              selectedPiece.id,
+                              selectedEdge.edge_idx,
+                              selectedEdge.zipper ?? null,
+                              selectedEdge.button ?? null,
+                              { ...selectedEdge.belt_loop, arch_mm: Number(e.target.value) },
+                            ),
+                          );
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="font-mono-num w-8 text-right">
+                        {selectedEdge.belt_loop.arch_mm.toFixed(1)}
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

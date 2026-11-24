@@ -60,6 +60,12 @@ fn op_edge_idx(op: &ParametricOp) -> Option<(Uuid, usize)> {
         }
         | ParametricOp::SetEdgeFinish {
             piece_id, edge_idx, ..
+        }
+        | ParametricOp::SetEdgeDrawstring {
+            piece_id, edge_idx, ..
+        }
+        | ParametricOp::SetEdgeHardware {
+            piece_id, edge_idx, ..
         } => Some((*piece_id, *edge_idx)),
         _ => None,
     }
@@ -70,6 +76,8 @@ fn is_edge_shape_mutator(op: &ParametricOp) -> bool {
         op,
         ParametricOp::SetSeamAllowance { .. }
             | ParametricOp::SetEdgeFinish { .. }
+            | ParametricOp::SetEdgeDrawstring { .. }
+            | ParametricOp::SetEdgeHardware { .. }
             | ParametricOp::SetEdgeLength { .. }
             | ParametricOp::ConvertEdgeCurve { .. }
             | ParametricOp::TrueCornerG1 { .. }

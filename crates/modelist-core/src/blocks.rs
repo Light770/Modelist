@@ -426,6 +426,10 @@ fn build_bodice_and_sleeve(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FrontTorso,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // --- PIECE 2: BACK BODICE ---
@@ -590,6 +594,10 @@ fn build_bodice_and_sleeve(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::BackTorso,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // --- PIECE 3: SET-IN SLEEVE ---
@@ -712,6 +720,10 @@ fn build_bodice_and_sleeve(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::SleeveLeft,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // GarmentCode-inspired multi-edge SeamInterfaces & interdependent SeamBindings
@@ -969,6 +981,10 @@ fn build_aline_skirt(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FrontSkirt,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     let bs_id = det_id("piece:skirt_back");
@@ -1082,6 +1098,10 @@ fn build_aline_skirt(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::BackSkirt,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     let stitching = StitchingGraph {
@@ -1320,6 +1340,10 @@ fn build_trouser_block(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::FrontLeg,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     // --- PIECE 2: BACK TROUSER ---
@@ -1458,6 +1482,10 @@ fn build_trouser_block(
         visible: true,
         fabric_role: "Shell".into(),
         arrangement_zone: ArrangementZone::BackLeg,
+        drawstrings: vec![],
+        zippers: vec![],
+        buttons: vec![],
+        belt_loops: vec![],
     };
 
     let stitching = StitchingGraph {

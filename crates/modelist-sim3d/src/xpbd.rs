@@ -18,9 +18,12 @@ use crate::arrange::{
     close_darts_for_placement, place_panel, place_trim, ArrangeCtx, InnerShell, TrimAnchor,
 };
 use crate::avatar::{AvatarBodyForm, AvatarMesh, AvatarPose, ParametricAvatar, Vec3};
-use crate::closures::garment_layer_for_role;
+use crate::closures::{
+    garment_layer_for_role, BeltLoopSim, ButtonClosure, ButtonSim, ZipperClosure, ZipperSim,
+};
 use crate::collide::{push_triangle_off_points, BodyPointGrid};
 use crate::diagnostics::{drape_quality, segment_triangle, DrapeQuality};
+use crate::drawstring::{DrawstringSim, EyeletAnchor};
 use crate::material::{MaterialSet, SolverMaterial, LOCK_STIFFENING};
 use crate::mesher::{edge_sewn_length_mm, mesh_pattern_piece_with_stations, PanelMesh};
 use crate::seam_physics::compute_seam_band_data;
@@ -170,6 +173,98 @@ pub(crate) struct ElasticChain {
     pub width_m: f32,
     pub total_orig: f32,
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct ElasticRing {
+    pub verts: Vec<usize>,
+    pub weld_copies: Vec<(usize, usize)>,
+    pub total_orig: f32,
+    pub target_ratio: f32,
+    pub stiffness_n_m: f32,
+    pub width_m: f32,
+}
+
+fn build_elastic_rings(elastic_chains: &[ElasticChain], vert_root: &[usize]) -> Vec<ElasticRing> {
+    let mut rings = Vec::new();
+    let mut used = vec![false; elastic_chains.len()];
+    for i in 0..elastic_chains.len() {
+        if used[i] || elastic_chains[i].verts.len() < 2 {
+            continue;
+        }
+        used[i] = true;
+        let mut path = elastic_chains[i].verts.clone();
+        let mut weld_copies: Vec<(usize, usize)> = Vec::new();
+        let mut total_orig = elastic_chains[i].total_orig;
+        let mut ratio_num = elastic_chains[i].target_ratio * total_orig;
+        let mut stiffness = elastic_chains[i].stiffness_n_m;
+        let mut width = elastic_chains[i].width_m;
+
+        loop {
+            let head_root = vert_root[path[0]];
+            let tail_root = vert_root[*path.last().unwrap()];
+            if head_root == tail_root {
+                break;
+            }
+            let mut matched = None;
+            for j in 0..elastic_chains.len() {
+                if used[j] || elastic_chains[j].verts.len() < 2 {
+                    continue;
+                }
+                if (elastic_chains[j].target_ratio - elastic_chains[i].target_ratio).abs() > 0.15 {
+                    continue;
+                }
+                let c = &elastic_chains[j];
+                if vert_root[c.verts[0]] == tail_root {
+                    matched = Some((j, false));
+                    break;
+                }
+                if vert_root[*c.verts.last().unwrap()] == tail_root {
+                    matched = Some((j, true));
+                    break;
+                }
+            }
+            let Some((j, rev)) = matched else {
+                break;
+            };
+            used[j] = true;
+            let c = &elastic_chains[j];
+            let join_idx = path.len() - 1;
+            let tail_v = path[join_idx];
+            if !rev {
+                if c.verts[0] != tail_v {
+                    weld_copies.push((c.verts[0], join_idx));
+                }
+                path.extend_from_slice(&c.verts[1..]);
+            } else {
+                let last_c = *c.verts.last().unwrap();
+                if last_c != tail_v {
+                    weld_copies.push((last_c, join_idx));
+                }
+                path.extend(c.verts[..c.verts.len() - 1].iter().rev().copied());
+            }
+            total_orig += c.total_orig;
+            ratio_num += c.target_ratio * c.total_orig;
+            stiffness = stiffness.max(c.stiffness_n_m);
+            width = width.max(c.width_m);
+        }
+
+        if vert_root[path[0]] == vert_root[*path.last().unwrap()] && path.len() >= 4 {
+            let last_v = path.pop().unwrap();
+            if last_v != path[0] {
+                weld_copies.push((last_v, 0));
+            }
+            rings.push(ElasticRing {
+                verts: path,
+                weld_copies,
+                total_orig,
+                target_ratio: ratio_num / total_orig.max(1e-6),
+                stiffness_n_m: stiffness,
+                width_m: width,
+            });
+        }
+    }
+    rings
+}
 /// Strain-limit passes per substep.
 const LIMIT_PASSES: u32 = 2;
 /// Bending passes per substep (with accumulated multipliers).
@@ -192,6 +287,7 @@ pub(crate) struct ClothCore {
     pub tethers: Vec<Tether>,
     pub chains: Vec<ChainLimit>,
     pub elastic_chains: Vec<ElasticChain>,
+    pub elastic_rings: Vec<ElasticRing>,
     pub edges: Vec<EdgeLimit>,
     edge_max: Vec<f32>,
     tether_max: Vec<f32>,
@@ -230,6 +326,7 @@ impl ClothCore {
             tethers: Vec::new(),
             chains: Vec::new(),
             elastic_chains: Vec::new(),
+            elastic_rings: Vec::new(),
             edges: Vec::new(),
             edge_max: Vec::new(),
             tether_max: Vec::new(),
@@ -533,7 +630,7 @@ impl ClothCore {
 
     /// Compliant contracting elastic band along an edge (jogger waistbands & ankle cuffs).
     pub fn solve_elastic_chains(&mut self, dt: f32, engage: f32) {
-        if self.elastic_chains.is_empty() || engage <= 1e-4 {
+        if (self.elastic_chains.is_empty() && self.elastic_rings.is_empty()) || engage <= 1e-4 {
             return;
         }
         let inv_dt2 = 1.0 / (dt * dt);
@@ -546,10 +643,10 @@ impl ClothCore {
                 continue;
             }
             let ratio = 1.0 - (1.0 - ec.target_ratio) * engage.clamp(0.0, 1.0);
-            let k_band = (ec.stiffness_n_m * ec.width_m.max(0.10)).max(28.0);
+            let k_band = (ec.stiffness_n_m * ec.width_m.max(0.28)).max(90.0);
 
             // Per-segment elastic springs toward `orig * ratio` (critically damped via `prev`).
-            for _pass in 0..2 {
+            for _pass in 0..6 {
                 for k in 0..n - 1 {
                     let u = ec.verts[k];
                     let v = ec.verts[k + 1];
@@ -571,8 +668,114 @@ impl ClothCore {
                     let dv = corr.scale(inv[v]);
                     pos[u] = pos[u].add(du);
                     pos[v] = pos[v].sub(dv);
-                    prev[u] = prev[u].add(du.scale(0.85));
-                    prev[v] = prev[v].sub(dv.scale(0.85));
+                    prev[u] = prev[u].add(du.scale(0.90));
+                    prev[v] = prev[v].sub(dv.scale(0.90));
+                }
+            }
+        }
+
+        // Closed-ring radial hoop contraction: pulls stretched elastic loops (waistbands, cuffs)
+        // uniformly inward toward their target circumference without O(1/N^2) stalling or seam tearing.
+        let mut grad: Vec<Vec3> = Vec::new();
+        for ring in &self.elastic_rings {
+            let n = ring.verts.len();
+            if n < 4 {
+                continue;
+            }
+            let ratio = 1.0 - (1.0 - ring.target_ratio) * engage.clamp(0.0, 1.0);
+            let target_len = ring.total_orig * ratio;
+            let mut len = 0.0_f32;
+            grad.clear();
+            grad.resize(n, Vec3::ZERO);
+            for k in 0..n {
+                let k1 = (k + 1) % n;
+                let d = pos[ring.verts[k1]].sub(pos[ring.verts[k]]);
+                let l = d.len();
+                len += l;
+                if l > 1e-9 {
+                    let u = d.scale(1.0 / l);
+                    grad[k] = grad[k].sub(u);
+                    grad[k1] = grad[k1].add(u);
+                }
+            }
+            let cval = len - target_len;
+            if cval <= 0.0 {
+                continue;
+            }
+            let mut wsum = 0.0_f32;
+            for k in 0..n {
+                wsum += inv[ring.verts[k]] * grad[k].len_sq();
+            }
+            if wsum < 1e-12 {
+                continue;
+            }
+            let k_band = (ring.stiffness_n_m * ring.width_m.max(0.28)).max(90.0);
+            let alpha = ring.total_orig / (k_band * 120.0);
+            let dl = -cval / (wsum + alpha * inv_dt2);
+            let mut max_disp = 0.0_f32;
+            for k in 0..n {
+                let v = ring.verts[k];
+                let d_len = grad[k].len() * inv[v] * dl.abs();
+                if d_len > max_disp {
+                    max_disp = d_len;
+                }
+            }
+            let max_step = 0.0012_f32;
+            let step_scale = if max_disp > max_step {
+                max_step / max_disp
+            } else {
+                1.0
+            };
+            let eff_dl = dl * step_scale;
+            for k in 0..n {
+                let v = ring.verts[k];
+                let dp = grad[k].scale(inv[v] * eff_dl);
+                pos[v] = pos[v].add(dp);
+                prev[v] = prev[v].add(dp.scale(0.95));
+            }
+            for &(copy_v, ring_k) in &ring.weld_copies {
+                let v = ring.verts[ring_k];
+                let dp = grad[ring_k].scale(inv[v] * eff_dl);
+                pos[copy_v] = pos[copy_v].add(dp);
+                prev[copy_v] = prev[copy_v].add(dp.scale(0.95));
+            }
+
+            // Wide waistband tape resists vertical rippling/dipping: smooth & level Y along the ring.
+            if ring.total_orig > 0.45 {
+                let eng = engage.clamp(0.0, 1.0);
+                for _ in 0..3 {
+                    let mut mean_y = 0.0_f32;
+                    for &v in &ring.verts {
+                        mean_y += pos[v].y;
+                    }
+                    mean_y /= n as f32;
+                    let ys: Vec<f32> = ring.verts.iter().map(|&v| pos[v].y).collect();
+                    for k in 0..n {
+                        let v = ring.verts[k];
+                        if inv[v] <= 1e-12 {
+                            continue;
+                        }
+                        let y_prev = ys[(k + n - 1) % n];
+                        let y_next = ys[(k + 1) % n];
+                        let dy = (0.25 * (0.5 * (y_prev + y_next) - ys[k])
+                            + 0.06 * (mean_y - ys[k]))
+                            * eng;
+                        pos[v].y += dy;
+                        prev[v].y += dy * 0.95;
+                    }
+                    for &(copy_v, ring_k) in &ring.weld_copies {
+                        let v = ring.verts[ring_k];
+                        if inv[v] <= 1e-12 {
+                            continue;
+                        }
+                        let y_prev = ys[(ring_k + n - 1) % n];
+                        let y_next = ys[(ring_k + 1) % n];
+                        let dy = (0.25 * (0.5 * (y_prev + y_next) - ys[ring_k])
+                            + 0.06 * (mean_y - ys[ring_k]))
+                            * eng;
+                        pos[copy_v].y += dy;
+                        prev[copy_v].y += dy * 0.95;
+                    }
                 }
             }
         }
@@ -1033,6 +1236,7 @@ pub struct ClothSimSession {
     contacts: Vec<Contact>,
     vert_offset: Vec<f32>,
     vert_friction: Vec<f32>,
+    vert_elastic_band: Vec<bool>,
     tri_near: Vec<bool>,
     scratch: Vec<u32>,
     step_count: u32,
@@ -1067,6 +1271,11 @@ pub struct ClothSimSession {
     pub flat_seam_mask: Vec<f32>,
     vert_render_thick: Vec<f32>,
     open_boundary_edges: Vec<(usize, usize)>,
+    drawstrings: Vec<DrawstringSim>,
+    zippers: Vec<ZipperSim>,
+    buttons: Vec<ButtonSim>,
+    belt_loops: Vec<BeltLoopSim>,
+    cloth_render_vert_count: usize,
     render_indices: Vec<u32>,
     render_positions: Vec<f32>,
     render_normals: Vec<f32>,
@@ -1567,6 +1776,9 @@ impl ClothSimSession {
                     if !(centre || legs) {
                         continue;
                     }
+                    if p.zippers.iter().any(|z| z.edge_id == edge.id) {
+                        continue;
+                    }
                     if let (Some(vl), Some(vr)) = (
                         edge_vert_map.get(&(p.id, 1, edge.id)),
                         edge_vert_map.get(&(p.id, -1, edge.id)),
@@ -1911,11 +2123,13 @@ impl ClothSimSession {
                 })
             })
             .collect();
+        let elastic_rings = build_elastic_rings(&elastic_chains, &vert_root);
         let mut core = ClothCore::new(positions, tris, hinges, mats);
         core.cross_seam_hinge_start = interior_hinge_count;
         core.tethers = tethers;
         core.chains = chains;
         core.elastic_chains = elastic_chains;
+        core.elastic_rings = elastic_rings;
         core.refresh_materials();
         core.sew = sew;
         let n = core.pos.len();
@@ -2037,6 +2251,29 @@ impl ClothSimSession {
             }
         }
         core.tri_elastic_target = tri_elastic_target;
+        let mut vert_elastic_band = vec![false; n];
+        for (ti, t) in core.tris.iter().enumerate() {
+            if core.tri_elastic_target.get(ti).copied().unwrap_or(1.0) < 0.995 {
+                for &v in &t.v {
+                    if v < n {
+                        vert_elastic_band[v] = true;
+                    }
+                }
+            }
+        }
+        for ec in &core.elastic_chains {
+            for &v in &ec.verts {
+                if v < n {
+                    vert_elastic_band[v] = true;
+                }
+            }
+        }
+        for hi in 0..core.cross_seam_hinge_start.min(core.hinges.len()) {
+            let hv = core.hinges[hi].v;
+            if vert_elastic_band[hv[0]] && vert_elastic_band[hv[1]] {
+                core.hinge_bend_mult[hi] *= 8.0;
+            }
+        }
         core.refresh_materials();
         let vbd = VbdSolverState::new(&core);
         let self_tris_init: Vec<[usize; 3]> = core.tris.iter().map(|t| t.v).collect();
@@ -2051,6 +2288,18 @@ impl ClothSimSession {
                 *edge_root_counts.entry(key).or_insert(0) += 1;
             }
         }
+        let mut sewn_vert = vec![false; n];
+        for sc in &core.sew {
+            if sc.a < n {
+                sewn_vert[sc.a] = true;
+            }
+            if sc.b0 < n {
+                sewn_vert[sc.b0] = true;
+            }
+            if sc.b1 < n {
+                sewn_vert[sc.b1] = true;
+            }
+        }
         let mut open_boundary_edges = Vec::new();
         for tri in triangles.chunks_exact(3) {
             let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
@@ -2058,13 +2307,297 @@ impl ClothSimSession {
                 let ra = vert_root.get(a).copied().unwrap_or(a);
                 let rb = vert_root.get(b).copied().unwrap_or(b);
                 let key = if ra < rb { (ra, rb) } else { (rb, ra) };
-                if edge_root_counts.get(&key).copied().unwrap_or(0) == 1 {
+                if edge_root_counts.get(&key).copied().unwrap_or(0) == 1
+                    && !(sewn_vert[a] && sewn_vert[b])
+                {
                     open_boundary_edges.push((a, b));
                 }
             }
         }
-        let n_render_verts = 2 * n + 4 * open_boundary_edges.len();
-        let mut render_indices = Vec::with_capacity(triangles.len() * 2 + open_boundary_edges.len() * 6);
+        let cloth_render_vert_count = 2 * n + 4 * open_boundary_edges.len();
+        let mut init_norm = vec![Vec3::ZERO; n];
+        for tri in triangles.chunks_exact(3) {
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            let fnv = core.pos[i1]
+                .sub(core.pos[i0])
+                .cross(core.pos[i2].sub(core.pos[i0]));
+            init_norm[i0] = init_norm[i0].add(fnv);
+            init_norm[i1] = init_norm[i1].add(fnv);
+            init_norm[i2] = init_norm[i2].add(fnv);
+        }
+        let mut init_normals = vec![0.0_f32; n * 3];
+        for i in 0..n {
+            let nm = init_norm[i].normalized();
+            init_normals[i * 3..i * 3 + 3].copy_from_slice(&[nm.x, nm.y, nm.z]);
+        }
+
+        let mut drawstrings: Vec<DrawstringSim> = Vec::new();
+        for (pi, p) in pieces.iter().enumerate() {
+            if !p.visible || p.drawstrings.is_empty() {
+                continue;
+            }
+            for ds in &p.drawstrings {
+                let mut side_chains: Vec<(i8, Vec<usize>, f32)> = Vec::new();
+                for side in [1_i8, -1_i8] {
+                    if let Some(vs) = edge_vert_map.get(&(p.id, side, ds.casing_edge_id)) {
+                        if vs.len() >= 3 {
+                            let mut ordered: Vec<(f64, usize)> =
+                                vs.iter().map(|v| (v.sewn_frac, v.global_idx)).collect();
+                            ordered.sort_by(|a, b| {
+                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            ordered.dedup_by(|a, b| a.1 == b.1);
+                            let verts: Vec<usize> = ordered.into_iter().map(|o| o.1).collect();
+                            let len_m: f32 = verts
+                                .windows(2)
+                                .map(|w| rest2d[w[1]].sub(rest2d[w[0]]).len() as f32)
+                                .sum();
+                            side_chains.push((side, verts, len_m));
+                        }
+                    }
+                }
+                if side_chains.is_empty() {
+                    continue;
+                }
+
+                // Stitch casing edge into a closed ring when both halves meet via vert_root.
+                let ds_ec: Vec<ElasticChain> = side_chains
+                    .iter()
+                    .map(|(_, verts, len_m)| ElasticChain {
+                        seg_rest_orig: verts
+                            .windows(2)
+                            .map(|w| (rest2d[w[1]].sub(rest2d[w[0]]).len() as f32).max(1e-4))
+                            .collect(),
+                        verts: verts.clone(),
+                        target_ratio: ds.tighten_ratio as f32,
+                        stiffness_n_m: 220.0,
+                        width_m: 0.02,
+                        total_orig: *len_m,
+                    })
+                    .collect();
+                let rings = build_elastic_rings(&ds_ec, &vert_root);
+                let (ring_verts, ring_weld_copies, total_orig) = if let Some(r) = rings.into_iter().next() {
+                    (r.verts, r.weld_copies, r.total_orig)
+                } else {
+                    (Vec::new(), Vec::new(), side_chains.iter().map(|c| c.2).sum())
+                };
+
+                let pick_eyelet = |verts: &[usize], side: i8| -> EyeletAnchor {
+                    let front_at_start = core.pos[verts[0]].z >= core.pos[*verts.last().unwrap()].z;
+                    let off_m = (ds.eyelet_offset_mm as f32 * 0.001).max(0.005);
+                    let mut acc = 0.0_f32;
+                    let mut top_vert = if front_at_start { verts[0] } else { *verts.last().unwrap() };
+                    if front_at_start {
+                        for w in verts.windows(2) {
+                            acc += rest2d[w[1]].sub(rest2d[w[0]]).len() as f32;
+                            top_vert = w[1];
+                            if acc >= off_m {
+                                break;
+                            }
+                        }
+                    } else {
+                        for w in verts.windows(2).rev() {
+                            acc += rest2d[w[1]].sub(rest2d[w[0]]).len() as f32;
+                            top_vert = w[0];
+                            if acc >= off_m {
+                                break;
+                            }
+                        }
+                    }
+                    let mut bottom_vert = top_vert;
+                    if let Some(opp_id) = ds.opposite_edge_id {
+                        if let Some(opp_vs) = edge_vert_map.get(&(p.id, side, opp_id)) {
+                            let target2d = rest2d[top_vert];
+                            let mut best_d2 = f64::INFINITY;
+                            for bv in opp_vs {
+                                let d2 = rest2d[bv.global_idx].sub(target2d).len_sq();
+                                if d2 < best_d2 {
+                                    best_d2 = d2;
+                                    bottom_vert = bv.global_idx;
+                                }
+                            }
+                        }
+                    }
+                    EyeletAnchor {
+                        top_vert,
+                        bottom_vert,
+                        side_sign: side as f32,
+                    }
+                };
+
+                let eyelets = if side_chains.len() >= 2 {
+                    [
+                        pick_eyelet(&side_chains[0].1, side_chains[0].0),
+                        pick_eyelet(&side_chains[1].1, side_chains[1].0),
+                    ]
+                } else {
+                    let v = &side_chains[0].1;
+                    let mid = v.len() / 2;
+                    [
+                        pick_eyelet(&v[..=mid.max(1).min(v.len() - 1)], side_chains[0].0),
+                        pick_eyelet(&v[mid..], -side_chains[0].0),
+                    ]
+                };
+
+                drawstrings.push(DrawstringSim::new(
+                    pi as u32,
+                    ring_verts,
+                    ring_weld_copies,
+                    total_orig,
+                    eyelets,
+                    &core.pos,
+                    &init_normals,
+                    &avatar,
+                    (ds.tail_length_mm as f32 * 0.001).max(0.05),
+                    (ds.cord_radius_mm as f32 * 0.001).max(0.0015),
+                    ds.tighten_ratio as f32,
+                    hex_to_rgb(&ds.color_hex),
+                ));
+            }
+        }
+
+        let mut zippers: Vec<ZipperSim> = Vec::new();
+        let mut buttons: Vec<ButtonSim> = Vec::new();
+        let mut belt_loops: Vec<BeltLoopSim> = Vec::new();
+        for (pi, p) in pieces.iter().enumerate() {
+            if !p.visible {
+                continue;
+            }
+            for z in &p.zippers {
+                if let (Some(vl), Some(vr)) = (
+                    edge_vert_map.get(&(p.id, 1, z.edge_id)),
+                    edge_vert_map.get(&(p.id, -1, z.edge_id)),
+                ) {
+                    let mut left: Vec<(f64, usize)> =
+                        vl.iter().map(|v| (v.sewn_frac, v.global_idx)).collect();
+                    let mut right: Vec<(f64, usize)> =
+                        vr.iter().map(|v| (v.sewn_frac, v.global_idx)).collect();
+                    left.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    right.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    if left.len() >= 2 && right.len() >= 2 {
+                        let left_verts: Vec<usize> = left.iter().map(|x| x.1).collect();
+                        let right_verts: Vec<usize> = left
+                            .iter()
+                            .map(|&(f, _)| {
+                                right
+                                    .iter()
+                                    .min_by(|a, b| {
+                                        (a.0 - f)
+                                            .abs()
+                                            .partial_cmp(&(b.0 - f).abs())
+                                            .unwrap_or(std::cmp::Ordering::Equal)
+                                    })
+                                    .map(|x| x.1)
+                                    .unwrap_or(right[0].1)
+                            })
+                            .collect();
+                        let mut closure =
+                            ZipperClosure::new(&core.pos, left_verts, right_verts, 1200.0, 0.08);
+                        closure.zip_fraction = (z.zip_fraction as f32).clamp(0.0, 1.0);
+                        zippers.push(ZipperSim {
+                            piece_idx: pi as u32,
+                            closure,
+                            teeth_width_m: (z.teeth_width_mm as f32 * 0.001).clamp(0.002, 0.015),
+                            color_rgb: hex_to_rgb(&z.color_hex),
+                        });
+                    }
+                }
+            }
+            for b in &p.buttons {
+                if let Some(vl) = edge_vert_map.get(&(p.id, 1, b.edge_id)) {
+                    if let Some(anchor) = vl.iter().min_by(|x, y| {
+                        (x.sewn_frac - b.param_t)
+                            .abs()
+                            .partial_cmp(&(y.sewn_frac - b.param_t).abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }) {
+                        let anchor_vert = anchor.global_idx;
+                        let post_vert = edge_vert_map
+                            .get(&(p.id, -1, b.edge_id))
+                            .and_then(|vr| {
+                                vr.iter().min_by(|x, y| {
+                                    (x.sewn_frac - b.param_t)
+                                        .abs()
+                                        .partial_cmp(&(y.sewn_frac - b.param_t).abs())
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                            })
+                            .map(|v| v.global_idx)
+                            .unwrap_or(anchor_vert);
+                        buttons.push(ButtonSim {
+                            piece_idx: pi as u32,
+                            closure: ButtonClosure {
+                                post_vert,
+                                ring_verts: vec![anchor_vert],
+                                shank_m: 0.004,
+                            },
+                            anchor_vert,
+                            diameter_m: (b.diameter_mm as f32 * 0.001).clamp(0.008, 0.036),
+                            color_rgb: hex_to_rgb(&b.color_hex),
+                        });
+                    }
+                }
+            }
+            for bl in &p.belt_loops {
+                let mut loops = Vec::new();
+                for side in [1_i8, -1_i8] {
+                    let Some(vb_list) = edge_vert_map.get(&(p.id, side, bl.base_edge_id)) else {
+                        continue;
+                    };
+                    if vb_list.is_empty() {
+                        continue;
+                    }
+                    let vt_list = bl
+                        .top_edge_id
+                        .and_then(|tid| edge_vert_map.get(&(p.id, side, tid)));
+                    for &pt in &bl.positions_t {
+                        let Some(bv) = vb_list.iter().min_by(|x, y| {
+                            (x.sewn_frac - pt)
+                                .abs()
+                                .partial_cmp(&(y.sewn_frac - pt).abs())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        }) else {
+                            continue;
+                        };
+                        let vb = bv.global_idx;
+                        let vt = vt_list
+                            .and_then(|list| {
+                                let p2 = rest2d[vb];
+                                list.iter().min_by(|x, y| {
+                                    rest2d[x.global_idx]
+                                        .sub(p2)
+                                        .len_sq()
+                                        .partial_cmp(&rest2d[y.global_idx].sub(p2).len_sq())
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                            })
+                            .map(|v| v.global_idx)
+                            .unwrap_or(vb);
+                        if vb != vt {
+                            loops.push((vb, vt));
+                        }
+                    }
+                }
+                if !loops.is_empty() {
+                    belt_loops.push(BeltLoopSim {
+                        piece_idx: pi as u32,
+                        loops,
+                        width_m: (bl.width_mm as f32 * 0.001).clamp(0.005, 0.025),
+                        arch_m: (bl.arch_mm as f32 * 0.001).clamp(0.002, 0.015),
+                        color_rgb: hex_to_rgb(&materials.fabric_for_role(&p.fabric_role).color_hex),
+                    });
+                }
+            }
+        }
+
+        let ds_render_verts: usize = drawstrings.iter().map(|d| d.render_vert_count()).sum();
+        let hw_render_verts: usize = zippers.iter().map(|z| z.render_vert_count()).sum::<usize>()
+            + buttons.iter().map(|b| b.render_vert_count()).sum::<usize>()
+            + belt_loops.iter().map(|l| l.render_vert_count()).sum::<usize>();
+        let n_render_verts = cloth_render_vert_count + ds_render_verts + hw_render_verts;
+        let mut render_indices = Vec::with_capacity(
+            triangles.len() * 2 + open_boundary_edges.len() * 6 + (ds_render_verts + hw_render_verts) * 6,
+        );
         render_indices.extend_from_slice(&triangles);
         for tri in triangles.chunks_exact(3) {
             render_indices.push(n as u32 + tri[0]);
@@ -2074,6 +2607,23 @@ impl ClothSimSession {
         for ei in 0..open_boundary_edges.len() {
             let b = (2 * n + 4 * ei) as u32;
             render_indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+        let mut ds_cursor = cloth_render_vert_count as u32;
+        for ds in &drawstrings {
+            ds.append_indices(ds_cursor, &mut render_indices);
+            ds_cursor += ds.render_vert_count() as u32;
+        }
+        for z in &zippers {
+            z.append_indices(ds_cursor, &mut render_indices);
+            ds_cursor += z.render_vert_count() as u32;
+        }
+        for b in &buttons {
+            b.append_indices(ds_cursor, &mut render_indices);
+            ds_cursor += b.render_vert_count() as u32;
+        }
+        for bl in &belt_loops {
+            bl.append_indices(ds_cursor, &mut render_indices);
+            ds_cursor += bl.render_vert_count() as u32;
         }
         let avg_thickness = if core.mats.is_empty() {
             0.0005
@@ -2112,6 +2662,7 @@ impl ClothSimSession {
             ],
             vert_offset: vec![0.003; n],
             vert_friction: vec![0.4; n],
+            vert_elastic_band,
             tri_near: vec![true; ntri],
             scratch: Vec::with_capacity(64),
             step_count: 0,
@@ -2142,6 +2693,11 @@ impl ClothSimSession {
             flat_seam_mask: seam_band.vert_seam_mask,
             vert_render_thick: vec![0.001; n],
             open_boundary_edges,
+            drawstrings,
+            zippers,
+            buttons,
+            belt_loops,
+            cloth_render_vert_count,
             render_indices,
             render_positions: vec![0.0; n_render_verts * 3],
             render_normals: vec![0.0; n_render_verts * 3],
@@ -2227,6 +2783,7 @@ impl ClothSimSession {
         if vert_idx < self.core.pos.len() {
             self.vbd.grab = Some(GrabState {
                 vert: vert_idx,
+                origin: self.core.pos[vert_idx],
                 target: Vec3::new(target[0], target[1], target[2]),
                 radius_m: radius_m.clamp(0.03, 0.45),
             });
@@ -2235,7 +2792,19 @@ impl ClothSimSession {
 
     pub fn move_grab(&mut self, target: [f32; 3]) {
         if let Some(ref mut g) = self.vbd.grab {
-            g.target = Vec3::new(target[0], target[1], target[2]);
+            let mut t = Vec3::new(target[0], target[1], target[2]);
+            let delta = t.sub(g.origin);
+            let dist = delta.len();
+            if dist > 0.22 {
+                t = g.origin.add(delta.scale(0.22 / dist));
+            }
+            t.y = t.y.max(0.02);
+            if let Some((d, n)) = self.avatar.eval_sdf_within(t, 0.03) {
+                if d < 0.020 {
+                    t = t.add(n.scale(0.020 - d));
+                }
+            }
+            g.target = t;
         }
     }
 
@@ -2299,7 +2868,12 @@ impl ClothSimSession {
         }
         for i in 0..n {
             self.vert_offset[i] = if off[i] > 0.0 { off[i] } else { 0.003 };
-            self.vert_friction[i] = if cnt[i] > 0 { fr[i] / cnt[i] as f32 } else { 0.4 };
+            let fric = if cnt[i] > 0 { fr[i] / cnt[i] as f32 } else { 0.4 };
+            self.vert_friction[i] = if self.vert_elastic_band.get(i).copied().unwrap_or(false) {
+                fric.max(0.90)
+            } else {
+                fric
+            };
             self.vert_thickness[i] = if thick[i] > 0.0 { thick[i] } else { 0.001 };
         }
     }
@@ -2377,6 +2951,13 @@ impl ClothSimSession {
                 thick[v] = avg;
             }
         }
+        for sc in &self.core.sew {
+            let tb = thick[sc.b0] * (1.0 - sc.w) + thick[sc.b1] * sc.w;
+            let avg = 0.5 * (thick[sc.a] + tb);
+            thick[sc.a] = avg;
+            thick[sc.b0] = avg;
+            thick[sc.b1] = avg;
+        }
         self.vert_render_thick = thick;
 
         let base_cols = self.cloth_colors();
@@ -2396,6 +2977,44 @@ impl ClothSimSession {
                 self.render_colors[dst + 1] = base_cols[src * 3 + 1] * 0.90;
                 self.render_colors[dst + 2] = base_cols[src * 3 + 2] * 0.90;
             }
+        }
+        let mut ds_col_cursor = self.cloth_render_vert_count * 3;
+        let mut ds_cols = Vec::new();
+        for ds in &self.drawstrings {
+            ds_cols.clear();
+            ds.append_colors(&mut ds_cols);
+            let end = ds_col_cursor + ds_cols.len();
+            if end <= self.render_colors.len() {
+                self.render_colors[ds_col_cursor..end].copy_from_slice(&ds_cols);
+            }
+            ds_col_cursor = end;
+        }
+        for z in &self.zippers {
+            ds_cols.clear();
+            z.append_colors(&mut ds_cols);
+            let end = ds_col_cursor + ds_cols.len();
+            if end <= self.render_colors.len() {
+                self.render_colors[ds_col_cursor..end].copy_from_slice(&ds_cols);
+            }
+            ds_col_cursor = end;
+        }
+        for b in &self.buttons {
+            ds_cols.clear();
+            b.append_colors(&mut ds_cols);
+            let end = ds_col_cursor + ds_cols.len();
+            if end <= self.render_colors.len() {
+                self.render_colors[ds_col_cursor..end].copy_from_slice(&ds_cols);
+            }
+            ds_col_cursor = end;
+        }
+        for bl in &self.belt_loops {
+            ds_cols.clear();
+            bl.append_colors(&mut ds_cols);
+            let end = ds_col_cursor + ds_cols.len();
+            if end <= self.render_colors.len() {
+                self.render_colors[ds_col_cursor..end].copy_from_slice(&ds_cols);
+            }
+            ds_col_cursor = end;
         }
     }
 
@@ -2444,6 +3063,81 @@ impl ClothSimSession {
             orig += ec.total_orig;
         }
         (cur * 1000.0, orig * 1000.0)
+    }
+
+    /// Returns `(cur_circ_mm, target_circ_mm, mean_clear_mm, max_clear_mm)` for each closed
+    /// elastic ring (waistbands, ankle cuffs).
+    pub fn elastic_ring_fit_stats(&self) -> Vec<(f32, f32, f32, f32)> {
+        self.core
+            .elastic_rings
+            .iter()
+            .filter(|r| r.verts.len() >= 2)
+            .map(|ring| {
+                let n = ring.verts.len();
+                let mut cur = 0.0_f32;
+                for k in 0..n {
+                    let k1 = (k + 1) % n;
+                    cur += self.core.pos[ring.verts[k1]]
+                        .sub(self.core.pos[ring.verts[k]])
+                        .len();
+                }
+                let mut sum_clear = 0.0_f32;
+                let mut max_clear = f32::NEG_INFINITY;
+                for &v in &ring.verts {
+                    let d_mm = self.avatar.eval_sdf(self.core.pos[v]).0 * 1000.0;
+                    sum_clear += d_mm;
+                    max_clear = max_clear.max(d_mm);
+                }
+                let mean_clear = sum_clear / n as f32;
+                (
+                    cur * 1000.0,
+                    ring.total_orig * ring.target_ratio * 1000.0,
+                    mean_clear,
+                    max_clear,
+                )
+            })
+            .collect()
+    }
+
+    /// Returns the vertical `max_y - min_y` span (mm) for each closed elastic ring.
+    pub fn elastic_ring_y_span_mm(&self) -> Vec<f32> {
+        self.core
+            .elastic_rings
+            .iter()
+            .filter(|r| r.verts.len() >= 2)
+            .map(|ring| {
+                let mut min_y = f32::INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for &v in &ring.verts {
+                    let y = self.core.pos[v].y;
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+                (max_y - min_y) * 1000.0
+            })
+            .collect()
+    }
+
+    pub fn drawstring_count(&self) -> usize {
+        self.drawstrings.len()
+    }
+
+    pub fn set_drawstring_tension(&mut self, tighten_ratio: f32) {
+        let clamped = tighten_ratio.clamp(0.65, 1.0);
+        for ds in &mut self.drawstrings {
+            ds.tighten_ratio = clamped;
+        }
+    }
+
+    pub fn set_zipper_fraction(&mut self, fraction: f32) {
+        let clamped = fraction.clamp(0.0, 1.0);
+        for z in &mut self.zippers {
+            z.closure.zip_fraction = clamped;
+        }
+    }
+
+    pub fn hardware_counts(&self) -> (usize, usize, usize) {
+        (self.zippers.len(), self.buttons.len(), self.belt_loops.len())
     }
 
     pub fn p99_motion_mm_s(&self) -> f32 {
@@ -2571,6 +3265,18 @@ impl ClothSimSession {
                     self.core.solve_chain_limits();
                     self.core.solve_elastic_chains(dt, elastic_engage);
                     self.core.solve_sew(max_pull);
+                    if self.vbd.grab.is_some() {
+                        for i in 0..self.core.pos.len() {
+                            if self.core.inv_mass[i] <= 0.0 {
+                                continue;
+                            }
+                            let d = self.core.pos[i].sub(self.core.prev[i]);
+                            let dl = d.len();
+                            if dl > 0.006 {
+                                self.core.pos[i] = self.core.prev[i].add(d.scale(0.006 / dl));
+                            }
+                        }
+                    }
                     self.collide_vertices(true);
                     if layered {
                         self.solve_layer_contacts();
@@ -2597,7 +3303,31 @@ impl ClothSimSession {
                         );
                     }
                     self.core.solve_sew_inelastic(max_pull * 0.5);
-                    self.solve_seam_welds(f >= sew_frames);
+                    self.solve_seam_welds(f >= sew_frames, f >= sew_frames + 10.0);
+                    if !self.drawstrings.is_empty() && f >= sew_frames {
+                        for ds in &mut self.drawstrings {
+                            ds.step(
+                                &mut self.core.pos,
+                                &mut self.core.prev,
+                                &self.core.inv_mass,
+                                &self.flat_normals,
+                                &self.core.tris,
+                                &self.avatar,
+                                dt,
+                                gravity,
+                                elastic_engage,
+                            );
+                        }
+                    }
+                    if f >= sew_frames {
+                        for z in &mut self.zippers {
+                            z.closure
+                                .step(&mut self.core.pos, &self.core.inv_mass, dt, gravity);
+                        }
+                        for b in &self.buttons {
+                            b.closure.solve(&mut self.core.pos, &self.core.inv_mass);
+                        }
+                    }
                     for (&vi, &pin_pos) in &self.vbd.user_pins {
                         self.core.pos[vi] = pin_pos;
                         self.core.prev[vi] = pin_pos;
@@ -2622,6 +3352,11 @@ impl ClothSimSession {
                     if let Some(grab) = self.vbd.grab {
                         let center = self.core.pos[grab.vert];
                         let r = grab.radius_m.max(1e-4);
+                        let mut pull = grab.target.sub(center);
+                        let pull_len = pull.len();
+                        if pull_len > 0.06 {
+                            pull = pull.scale(0.06 / pull_len);
+                        }
                         for i in 0..self.core.pos.len() {
                             if self.core.inv_mass[i] <= 0.0 {
                                 continue;
@@ -2629,9 +3364,9 @@ impl ClothSimSession {
                             let d = self.core.pos[i].sub(center).len();
                             if d <= r {
                                 let w = (-2.0 * (d / r) * (d / r)).exp();
-                                let target_i = grab.target.add(self.core.pos[i].sub(center));
+                                let target_i = self.core.pos[i].add(pull);
                                 self.core.pos[i] = self.core.pos[i]
-                                    .add(target_i.sub(self.core.pos[i]).scale(0.35 * w));
+                                    .add(target_i.sub(self.core.pos[i]).scale(0.15 * w));
                             }
                         }
                     }
@@ -2667,13 +3402,49 @@ impl ClothSimSession {
                         );
                     }
                     self.core.solve_sew(max_pull);
+                    if self.vbd.grab.is_some() {
+                        for i in 0..self.core.pos.len() {
+                            if self.core.inv_mass[i] <= 0.0 {
+                                continue;
+                            }
+                            let d = self.core.pos[i].sub(self.core.prev[i]);
+                            let dl = d.len();
+                            if dl > 0.006 {
+                                self.core.pos[i] = self.core.prev[i].add(d.scale(0.006 / dl));
+                            }
+                        }
+                    }
                     self.collide_vertices(true);
                     if layered {
                         self.solve_layer_contacts();
                     }
                     self.collide_body_points();
                     self.core.solve_sew_inelastic(max_pull * 0.5);
-                    self.solve_seam_welds(f >= sew_frames);
+                    self.solve_seam_welds(f >= sew_frames, f >= sew_frames + 10.0);
+                    if !self.drawstrings.is_empty() && f >= sew_frames {
+                        for ds in &mut self.drawstrings {
+                            ds.step(
+                                &mut self.core.pos,
+                                &mut self.core.prev,
+                                &self.core.inv_mass,
+                                &self.flat_normals,
+                                &self.core.tris,
+                                &self.avatar,
+                                dt,
+                                gravity,
+                                elastic_engage,
+                            );
+                        }
+                    }
+                    if f >= sew_frames {
+                        for z in &mut self.zippers {
+                            z.closure
+                                .step(&mut self.core.pos, &self.core.inv_mass, dt, gravity);
+                        }
+                        for b in &self.buttons {
+                            b.closure.solve(&mut self.core.pos, &self.core.inv_mass);
+                        }
+                    }
                     for (&vi, &pin_pos) in &self.vbd.user_pins {
                         self.core.pos[vi] = pin_pos;
                         self.core.prev[vi] = pin_pos;
@@ -2734,7 +3505,7 @@ impl ClothSimSession {
 
     /// Projects each closed 1:1 / multi-way seam weld cluster to its mass-weighted centroid
     /// after collision so seams stay watertight (`0.0 mm` slit) without velocity spikes.
-    fn solve_seam_welds(&mut self, snap_lock: bool) {
+    fn solve_seam_welds(&mut self, snap_lock: bool, force_locked: bool) {
         if !snap_lock || self.seam_welds.is_empty() {
             return;
         }
@@ -2747,8 +3518,8 @@ impl ClothSimSession {
             for &v in &cluster[1..] {
                 max_d2 = max_d2.max(self.core.pos[v].sub(p0).len_sq());
             }
-            // Only snap-weld once panels have converged within 25 mm.
-            if max_d2 > 0.025 * 0.025 {
+            // Only snap-weld once panels have converged within 25 mm (once locked, never tear).
+            if !force_locked && max_d2 > 0.025 * 0.025 {
                 continue;
             }
             let mut pinned_pos: Option<Vec3> = None;
@@ -2796,7 +3567,7 @@ impl ClothSimSession {
             let pb = self.core.pos[sc.b0]
                 .scale(1.0 - sc.w)
                 .add(self.core.pos[sc.b1].scale(sc.w));
-            if pb.sub(self.core.pos[sc.a]).len_sq() > 0.015 * 0.015 {
+            if !force_locked && pb.sub(self.core.pos[sc.a]).len_sq() > 0.015 * 0.015 {
                 continue;
             }
             let mut c = pb;
@@ -2868,6 +3639,31 @@ impl ClothSimSession {
                 let b = 2 * n + (4 * ei) as u32;
                 out.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
             }
+        }
+        let mut ds_cursor = self.cloth_render_vert_count as u32;
+        for ds in &self.drawstrings {
+            if shown.get(ds.piece_idx as usize).copied().unwrap_or(true) {
+                ds.append_indices(ds_cursor, &mut out);
+            }
+            ds_cursor += ds.render_vert_count() as u32;
+        }
+        for z in &self.zippers {
+            if shown.get(z.piece_idx as usize).copied().unwrap_or(true) {
+                z.append_indices(ds_cursor, &mut out);
+            }
+            ds_cursor += z.render_vert_count() as u32;
+        }
+        for b in &self.buttons {
+            if shown.get(b.piece_idx as usize).copied().unwrap_or(true) {
+                b.append_indices(ds_cursor, &mut out);
+            }
+            ds_cursor += b.render_vert_count() as u32;
+        }
+        for bl in &self.belt_loops {
+            if shown.get(bl.piece_idx as usize).copied().unwrap_or(true) {
+                bl.append_indices(ds_cursor, &mut out);
+            }
+            ds_cursor += bl.render_vert_count() as u32;
         }
         out
     }
@@ -3090,6 +3886,22 @@ impl ClothSimSession {
                 p.y = 0.005;
             }
             let off = self.vert_offset[i];
+            let step_disp = p.sub(self.core.prev[i]);
+            if self.vbd.grab.is_some() && step_disp.len_sq() > 0.003 * 0.003 {
+                let mid = self.core.prev[i].add(step_disp.scale(0.5));
+                if let Some((d_mid, n_mid)) = self.avatar.eval_sdf_within(mid, off + 0.008) {
+                    if d_mid < off {
+                        let p_entry = self.core.prev[i];
+                        if let Some((d_prev, n_prev)) = self.avatar.eval_sdf_within(p_entry, off + 0.02) {
+                            let push_n = if n_prev.len_sq() > 0.25 { n_prev } else { n_mid };
+                            p = p_entry.add(push_n.scale((off - d_prev).max(0.0)));
+                        } else {
+                            p = mid.add(n_mid.scale(off - d_mid));
+                        }
+                        self.core.prev[i] = p;
+                    }
+                }
+            }
             let c = &mut self.contacts[i];
             let moved = p.sub(c.at).len();
             if c.dist >= 0.0 && c.dist - moved > off + 0.004 {
@@ -3290,6 +4102,30 @@ impl ClothSimSession {
                 }
             }
         }
+        for sc in &self.core.sew {
+            let pb = self.core.pos[sc.b0]
+                .scale(1.0 - sc.w)
+                .add(self.core.pos[sc.b1].scale(sc.w));
+            if self.core.pos[sc.a].sub(pb).len_sq() > 0.006 * 0.006 {
+                continue;
+            }
+            let nb = norm_acc[sc.b0]
+                .scale(1.0 - sc.w)
+                .add(norm_acc[sc.b1].scale(sc.w));
+            let sum_n = norm_acc[sc.a].add(nb);
+            if sum_n.len_sq() <= 1e-12 {
+                continue;
+            }
+            let avg_dir = sum_n.normalized();
+            if norm_acc[sc.a].len_sq() > 1e-12 && norm_acc[sc.a].dot(avg_dir) > 0.0 {
+                norm_acc[sc.a] = norm_acc[sc.a].normalized().scale(0.35).add(avg_dir.scale(0.65));
+            }
+            for &b in &[sc.b0, sc.b1] {
+                if norm_acc[b].len_sq() > 1e-12 && norm_acc[b].dot(avg_dir) > 0.0 {
+                    norm_acc[b] = norm_acc[b].normalized().scale(0.35).add(avg_dir.scale(0.65));
+                }
+            }
+        }
         let strains = self.core.tri_strains();
         let mut strain_sum = vec![0.0_f32; n];
         let mut tension_sum = vec![0.0_f32; n];
@@ -3382,6 +4218,55 @@ impl ClothSimSession {
                 self.render_clearance[dst] = self.flat_clearance_mm[src];
                 self.render_seam_mask[dst] = self.flat_seam_mask[src];
             }
+        }
+        let mut ds_cursor = self.cloth_render_vert_count;
+        for ds in &self.drawstrings {
+            ds.write_render_geometry(
+                &self.core.pos,
+                &self.flat_normals,
+                &self.vert_render_thick,
+                &self.avatar,
+                ds_cursor,
+                &mut self.render_positions,
+                &mut self.render_normals,
+            );
+            ds_cursor += ds.render_vert_count();
+        }
+        for z in &self.zippers {
+            z.write_render_geometry(
+                &self.core.pos,
+                &self.flat_normals,
+                &self.vert_render_thick,
+                &self.avatar,
+                ds_cursor,
+                &mut self.render_positions,
+                &mut self.render_normals,
+            );
+            ds_cursor += z.render_vert_count();
+        }
+        for b in &self.buttons {
+            b.write_render_geometry(
+                &self.core.pos,
+                &self.flat_normals,
+                &self.vert_render_thick,
+                &self.avatar,
+                ds_cursor,
+                &mut self.render_positions,
+                &mut self.render_normals,
+            );
+            ds_cursor += b.render_vert_count();
+        }
+        for bl in &self.belt_loops {
+            bl.write_render_geometry(
+                &self.core.pos,
+                &self.flat_normals,
+                &self.vert_render_thick,
+                &self.avatar,
+                ds_cursor,
+                &mut self.render_positions,
+                &mut self.render_normals,
+            );
+            ds_cursor += bl.render_vert_count();
         }
     }
 }
