@@ -16,8 +16,10 @@ export const modelistsession_create_seam_binding: (a: number, b: number, c: numb
 export const modelistsession_delete_seam_binding: (a: number, b: number, c: number) => void;
 export const modelistsession_delete_variable: (a: number, b: number, c: number) => void;
 export const modelistsession_dispose_sim3d: (a: number) => void;
+export const modelistsession_duplicate_component: (a: number, b: number, c: number) => [number, number];
 export const modelistsession_duplicate_piece: (a: number, b: number, c: number) => void;
 export const modelistsession_export_aama_rul: (a: number) => [number, number];
+export const modelistsession_export_component_file: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const modelistsession_export_dxf_aama: (a: number) => [number, number];
 export const modelistsession_export_marker_svg: (a: number, b: number, c: number) => [number, number];
 export const modelistsession_export_pom_csv: (a: number) => [number, number];
@@ -43,6 +45,8 @@ export const modelistsession_hit_test: (a: number, b: number, c: number, d: numb
 export const modelistsession_import_dxf_aama: (a: number, b: number, c: number) => [number, number, number, number];
 export const modelistsession_import_garmentcode_json: (a: number, b: number, c: number) => [number, number, number, number];
 export const modelistsession_init_sim3d: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const modelistsession_insert_component_file: (a: number, b: number, c: number) => [number, number, number, number];
+export const modelistsession_load_project_file: (a: number, b: number, c: number) => [number, number, number, number];
 export const modelistsession_load_project_json: (a: number, b: number, c: number) => [number, number];
 export const modelistsession_load_template: (a: number, b: number, c: number) => void;
 export const modelistsession_mirror_piece: (a: number, b: number, c: number) => void;
@@ -60,6 +64,7 @@ export const modelistsession_rename_component: (a: number, b: number, c: number,
 export const modelistsession_reorder_op: (a: number, b: number, c: number) => number;
 export const modelistsession_reset_fabric_to_preset: (a: number) => void;
 export const modelistsession_reset_sim3d: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const modelistsession_save_project_container: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const modelistsession_serialize_project_json: (a: number) => [number, number];
 export const modelistsession_set_active_component: (a: number, b: number, c: number) => void;
 export const modelistsession_set_active_size: (a: number, b: number, c: number) => void;
@@ -100,6 +105,8 @@ export const modelistsession_update_op_json: (a: number, b: number, c: number, d
 export const modelistsession_update_seam_binding: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const modelistsession_upsert_seam_binding: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
 export const template_catalog_json: () => [number, number];
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;

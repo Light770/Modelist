@@ -51,7 +51,7 @@ export const StudioRoot: React.FC = () => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const draggingSplitRef = useRef(false);
   const lastCursorRef = useRef<{ x: number; y: number }>({ x: 520, y: 340 });
-  const [autosaveCandidate, setAutosaveCandidate] = useState<string | null>(null);
+  const [autosaveCandidate, setAutosaveCandidate] = useState<Uint8Array | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -87,8 +87,10 @@ export const StudioRoot: React.FC = () => {
         setReady(true);
         requestFitView();
         const saved = await loadAutosave();
-        if (saved && saved.jsonText && active) {
-          setAutosaveCandidate(saved.jsonText);
+        if (saved && active) {
+          // Container bytes, or JSON text from builds before the container.
+          const bytes = saved.bytes ?? (saved.jsonText ? new TextEncoder().encode(saved.jsonText) : null);
+          if (bytes) setAutosaveCandidate(bytes);
         }
       })
       .catch((err) => {
@@ -364,7 +366,7 @@ export const StudioRoot: React.FC = () => {
             <button
               onClick={() => {
                 try {
-                  setSnapshot(kernel.loadProjectJson(autosaveCandidate));
+                  setSnapshot(kernel.loadProjectFile(autosaveCandidate).snapshot);
                   requestFitView();
                 } finally {
                   setAutosaveCandidate(null);

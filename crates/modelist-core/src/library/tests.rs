@@ -407,3 +407,44 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_relocated_garment_keeps_its_history_next_to_the_original() {
+    use crate::model::{det_id, CornerRule, ParametricOp, Point2};
+    let mut p = super::new_project("boxy_tee");
+    let front = det_id("boxy_tee:piece:front");
+    p.components[0].ops.push(ParametricOp::SetSeamAllowance {
+        id: det_id("op:sa:1"),
+        piece_id: front,
+        edge_idx: 0,
+        width_mm: 27.0,
+        corner_rule: CornerRule::Miter { limit: 2.5 },
+    });
+    p.components[0].ops.push(ParametricOp::AddDrillHole {
+        id: det_id("op:drill:1"),
+        piece_id: front,
+        x: 100.0,
+        y: 200.0,
+        label: "pocket".into(),
+    });
+    let mut copy = super::relocate_component(&p.components[0], "component:boxy_tee:7", &p.measurements);
+    super::shift_component(&mut copy, 2000.0, 0.0);
+    p.components.push(copy);
+
+    let draft = crate::blocks::build_project_pieces(&p, &p.measurements);
+    let ids: std::collections::HashSet<_> = draft.pieces.iter().map(|x| x.id).collect();
+    assert_eq!(ids.len(), draft.pieces.len(), "no ID shared with the original");
+    let half = draft.pieces.len() / 2;
+    let (orig, dup) = (&draft.pieces[0], &draft.pieces[half]);
+    assert_eq!(orig.name, dup.name);
+    assert!((dup.seam_loop.edges[0].sa_width_mm - 27.0).abs() < 1e-9, "the copy's history applies to the copy");
+    assert_eq!(dup.drill_holes.len(), orig.drill_holes.len());
+    let (h0, h1) = (&orig.drill_holes.last().unwrap().pos, &dup.drill_holes.last().unwrap().pos);
+    assert!((h1.x - h0.x - 2000.0).abs() < 1e-6 && (h1.y - h0.y).abs() < 1e-6, "absolute positions move with it");
+    let dx = dup.seam_loop.edges[0].start.x - orig.seam_loop.edges[0].start.x;
+    assert!((dx - 2000.0).abs() < 1e-6);
+    // Relocating twice into the same namespace is deterministic.
+    let again = super::relocate_component(&p.components[0], "component:boxy_tee:7", &p.measurements);
+    assert_eq!(again.ops[0].id(), super::relocate_component(&p.components[0], "component:boxy_tee:7", &p.measurements).ops[0].id());
+    let _ = Point2::ZERO;
+}

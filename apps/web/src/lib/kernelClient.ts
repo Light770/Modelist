@@ -50,7 +50,11 @@ function scheduleAutosave() {
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
     if (session) {
-      saveAutosave(session.serialize_project_json());
+      try {
+        saveAutosave(session.save_project_container(new Date().toISOString(), '', new Uint8Array()));
+      } catch {
+        // Autosave is best effort.
+      }
     }
   }, 600);
 }
@@ -181,6 +185,29 @@ export const kernel = {
     return getSnapshot();
   },
 
+  /** Adds a copy of a garment (with its history) beside the others. */
+  duplicateComponent(componentId: string): UiSnapshot {
+    getSession().duplicate_component(componentId);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** One garment as its own `.modelist` file (library entry or to share). */
+  exportComponentFile(componentId: string, thumbnailPng: Uint8Array): Uint8Array {
+    return getSession().export_component_file(componentId, thumbnailPng);
+  },
+
+  /** Adds the garments of a `.modelist` file, refitted to this document's body. */
+  insertComponentFile(bytes: Uint8Array): UiSnapshot {
+    getSession().insert_component_file(bytes);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
   removeComponent(componentId: string): UiSnapshot {
     getSession().remove_component(componentId);
     bumpRender();
@@ -236,8 +263,23 @@ export const kernel = {
     return getSnapshot();
   },
 
+  /** The whole project as one JSON document (debug export). */
   serializeProject(): string {
     return getSession().serialize_project_json();
+  },
+
+  /** The project as a `.modelist` container (ZIP of JSON parts). */
+  saveProjectContainer(sessionJson: string, thumbnailPng: Uint8Array): Uint8Array {
+    return getSession().save_project_container(new Date().toISOString(), sessionJson, thumbnailPng);
+  },
+
+  /** Opens a `.modelist` container or JSON project; returns the saved UI state too. */
+  loadProjectFile(bytes: Uint8Array): { snapshot: UiSnapshot; session: string } {
+    const session = getSession().load_project_file(bytes);
+    bumpRender();
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return { snapshot: getSnapshot(), session };
   },
 
   loadProjectJson(json: string): UiSnapshot {

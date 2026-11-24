@@ -18,7 +18,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Point2 {
     pub x: f64,
     pub y: f64,
@@ -123,7 +123,7 @@ impl Point2 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CurveSegment {
     Line { end: Point2 },
@@ -157,7 +157,7 @@ impl CurveSegment {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CornerRule {
     Miter { limit: f64 },
@@ -174,7 +174,7 @@ impl Default for CornerRule {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PolyEdge {
     pub id: Uuid,
     pub start: Point2,
@@ -190,7 +190,7 @@ impl PolyEdge {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ClosedPolyCurve {
     pub edges: Vec<PolyEdge>,
 }
@@ -307,7 +307,7 @@ pub fn polygon_perimeter(pts: &[Point2]) -> f64 {
     len
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DartFoldDir {
     TowardCf,
@@ -316,7 +316,7 @@ pub enum DartFoldDir {
     TowardSide,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DartCapStyle {
     FoldedReflection,
@@ -324,7 +324,7 @@ pub enum DartCapStyle {
     Cutout,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DartEntity {
     pub id: Uuid,
     pub name: String,
@@ -350,7 +350,7 @@ impl DartEntity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotchStyle {
     Slit,
@@ -360,7 +360,7 @@ pub enum NotchStyle {
     Castle,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NotchAnchor {
     pub id: Uuid,
     pub edge_idx: usize,
@@ -383,7 +383,7 @@ impl NotchAnchor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectedNotch {
     pub id: Uuid,
     pub seam_pt: Point2,
@@ -397,7 +397,7 @@ pub struct ProjectedNotch {
     pub is_auto_partner: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GrainRotationMode {
     OneWay,
@@ -406,14 +406,14 @@ pub enum GrainRotationMode {
     Free,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GrainlineSpec {
     pub start: Point2,
     pub end: Point2,
     pub rotation_mode: GrainRotationMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DrillHole {
     pub id: Uuid,
     pub pos: Point2,
@@ -421,7 +421,7 @@ pub struct DrillHole {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InternalLine {
     pub id: Uuid,
     pub label: String,
@@ -429,7 +429,7 @@ pub struct InternalLine {
     pub dashed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GradeDelta {
     pub edge_idx: usize,
     pub size_name: String,
@@ -437,7 +437,7 @@ pub struct GradeDelta {
     pub dy: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ArrangementZone {
     #[default]
@@ -452,7 +452,7 @@ pub enum ArrangementZone {
     FlatCustom,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PatternPiece {
     pub id: Uuid,
     pub name: String,
@@ -474,7 +474,7 @@ pub struct PatternPiece {
 }
 
 /// Deterministic UUID-based edge reference inside a SeamInterface.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EdgeRef {
     pub piece_id: Uuid,
     pub edge_id: Uuid,
@@ -482,14 +482,14 @@ pub struct EdgeRef {
 }
 
 /// Ordered sequence of edges forming a logical connection boundary (GarmentCode-inspired).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SeamInterface {
     pub id: Uuid,
     pub name: String,
     pub edges: Vec<EdgeRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EaseSpec {
     Exact,
@@ -523,7 +523,7 @@ impl EaseSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SeamDriver {
     #[default]
@@ -533,7 +533,7 @@ pub enum SeamDriver {
     MonitorOnly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SeamType {
     #[default]
@@ -556,7 +556,7 @@ impl SeamType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SeamBinding {
     pub id: Uuid,
     pub label: String,
@@ -574,7 +574,7 @@ pub struct SeamBinding {
     pub auto_partner_notches: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StitchingGraph {
     pub bindings: Vec<SeamBinding>,
 }
@@ -595,7 +595,7 @@ fn default_ankle() -> f64 {
     230.0
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BodyMeasurements {
     pub bust_mm: f64,
     pub waist_mm: f64,
@@ -808,7 +808,7 @@ impl BodyMeasurements {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EaseTable {
     pub bust_ease_mm: f64,
     pub waist_ease_mm: f64,
@@ -873,7 +873,7 @@ fn default_fabric_color() -> String {
 }
 
 /// How a fabric is constructed. Drives defaults, grouping in the UI and the stretch behaviour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FabricConstruction {
     #[default]
@@ -883,7 +883,7 @@ pub enum FabricConstruction {
 }
 
 /// Surface finish used by the 3D renderer. It changes the look only, never the physics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FabricFinish {
     #[default]
@@ -904,7 +904,7 @@ pub enum FabricFinish {
 /// - shear stiffness in N/m: in-plane resistance to bias distortion;
 /// - bending rigidity in uN*m (1 gf*cm2/cm = 98 uN*m), measured with the warp or the weft yarns bent;
 /// - max stretch in %: strain at which the yarns jam and the fabric locks (wovens 2-5, knits 20-100).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FabricSpec {
     pub id: String,
     pub name: String,
@@ -1264,7 +1264,7 @@ impl FabricSpec {
 }
 
 /// Fabric assigned to a piece role other than the shell (e.g. "rib", "lining", "contrast").
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RoleFabric {
     pub role: String,
     pub fabric: FabricSpec,
@@ -1301,14 +1301,14 @@ fn format_fabric_value(v: f64) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ParametricVar {
     pub name: String,
     pub expr: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GradeMode {
     ParametricMtm,
@@ -1316,7 +1316,7 @@ pub enum GradeMode {
     HybridDifferential,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StackAnchor {
     GrainlineMidpoint,
@@ -1324,14 +1324,14 @@ pub enum StackAnchor {
     TopLeftAnchor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HingeMode {
     EdgeHinge,
     ParallelShift,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ParametricOp {
     MoveVertex {
@@ -1695,7 +1695,7 @@ pub fn remap_entity_ids(
     out
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SizeTable {
     pub sizes: Vec<String>,
     pub active_size: String,
@@ -1765,7 +1765,7 @@ fn default_origin() -> Point2 {
 
 /// One garment of a project (a tee, a vest, trousers): its template, ease, formulas, fabrics,
 /// construction history and pieces. Every component of a file is drafted on the same body.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GarmentComponent {
     /// Written once when the component is created and saved with it.
     pub id: Uuid,
@@ -1913,7 +1913,7 @@ impl GarmentComponent {
 }
 
 /// A `.modelist` project: one body, one size run, and the garments (components) worn on it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PatternProject {
     #[serde(default)]
     pub format_version: u32,
@@ -1931,7 +1931,7 @@ pub struct PatternProject {
 }
 
 /// Version 0 file layout: a single garment stored on the project itself.
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct ProjectV0 {
     id: Uuid,
     name: String,
@@ -2095,7 +2095,7 @@ pub fn translate_piece(p: &mut PatternPiece, dx: f64, dy: f64) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EvaluatedPiece {
     pub piece: PatternPiece,
     pub seam_polyline: Vec<Point2>,
@@ -2110,7 +2110,7 @@ pub struct EvaluatedPiece {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EvaluatedProject {
     pub pieces: Vec<EvaluatedPiece>,
     pub stitching: StitchingGraph,

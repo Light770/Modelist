@@ -459,3 +459,78 @@ pub fn new_project(template_id: &str) -> crate::model::PatternProject {
         active_component: 0,
     }
 }
+
+/// Moves a garment on the canvas: its drafted pieces (through `offset_2d`), its stored custom
+/// pieces, and the ops that hold absolute positions.
+pub fn shift_component(comp: &mut crate::model::GarmentComponent, dx: f64, dy: f64) {
+    use crate::model::ParametricOp;
+    comp.offset_2d = Point2::new(comp.offset_2d.x + dx, comp.offset_2d.y + dy);
+    for p in &mut comp.custom_pieces {
+        crate::model::translate_piece(p, dx, dy);
+    }
+    for op in &mut comp.ops {
+        if let ParametricOp::AddDrillHole { x, y, .. } = op {
+            *x += dx;
+            *y += dy;
+        }
+    }
+}
+
+/// A copy of a garment with every ID moved to the namespace `ns`, so it can join a project that
+/// may already hold the original (a duplicate, or a garment inserted from the library twice).
+///
+/// Drafted IDs follow from the namespace (`det_id("{ns}:{template id}")`); the IDs the garment
+/// stores (its own, ops, custom pieces, seams it added) are renamed the same way, and every
+/// reference to them inside the garment is rewritten, so its history still finds its pieces.
+pub fn relocate_component(
+    comp: &crate::model::GarmentComponent,
+    ns: &str,
+    measurements: &BodyMeasurements,
+) -> crate::model::GarmentComponent {
+    use crate::model::det_id;
+    // The template's own IDs (no namespace, no ops), and what they are called in `comp`.
+    let (originals, stitching, _, _) = crate::blocks::build_template_pieces_in(
+        &comp.template_id,
+        "",
+        Point2::new(0.0, 0.0),
+        measurements,
+        &comp.ease,
+        &comp.variables,
+        &[],
+        &[],
+    );
+    let mut drafted: Vec<Uuid> = Vec::new();
+    for p in &originals {
+        drafted.push(p.id);
+        drafted.extend(p.seam_loop.edges.iter().map(|e| e.id));
+        drafted.extend(p.cutouts.iter().flat_map(|c| c.edges.iter().map(|e| e.id)));
+        drafted.extend(p.darts.iter().map(|d| d.id));
+        drafted.extend(p.notches.iter().map(|n| n.id));
+        drafted.extend(p.drill_holes.iter().map(|h| h.id));
+        drafted.extend(p.internal_lines.iter().map(|l| l.id));
+    }
+    for b in &stitching.bindings {
+        drafted.extend([b.id, b.interface_a.id, b.interface_b.id]);
+    }
+    let named = |o: Uuid, space: &str| if space.is_empty() { o } else { det_id(&format!("{space}:{o}")) };
+    let map: HashMap<Uuid, Uuid> = drafted.iter().map(|&o| (named(o, &comp.id_ns), named(o, ns))).collect();
+
+    fn walk(v: &mut serde_json::Value, f: &dyn Fn(Uuid) -> Uuid) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Ok(u) = Uuid::parse_str(s) {
+                    *s = f(u).to_string();
+                }
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|x| walk(x, f)),
+            serde_json::Value::Object(o) => o.values_mut().for_each(|x| walk(x, f)),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(comp).expect("component serializes");
+    walk(&mut value, &|u| map.get(&u).copied().unwrap_or_else(|| det_id(&format!("{ns}:{u}"))));
+    let mut out: crate::model::GarmentComponent = serde_json::from_value(value).expect("component round-trips");
+    out.id = det_id(ns);
+    out.id_ns = ns.to_string();
+    out
+}

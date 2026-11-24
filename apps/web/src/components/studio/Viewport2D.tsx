@@ -1338,6 +1338,7 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   return (
     <div style={style} className="relative flex-1 min-w-[240px] h-full overflow-hidden">
       <canvas
+        data-viewport2d="true"
         ref={canvasRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

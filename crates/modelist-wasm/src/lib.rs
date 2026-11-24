@@ -10,6 +10,7 @@ use modelist_core::model::{
     PatternProject, SeamBinding, SeamDriver, SeamInterface, SeamType, StackAnchor,
     StitchingGraph, PatternPiece, remap_entity_ids,
 };
+use modelist_core::container::{is_container, read_container, write_container, ContainerPart, WriteOptions};
 use modelist_core::nesting::{compute_marker_plan, export_marker_svg, MarkerConfig};
 use modelist_core::offset::evaluate_piece;
 use modelist_core::ops::{make_rect_pattern_piece, SeamWalkFrame};
@@ -261,6 +262,10 @@ pub struct ModelistSession {
     show_mirror_unfold: bool,
     /// Strictly lazy-loaded on-demand 3D cloth simulator (None during 2D drafting!)
     sim3d: Option<ClothSimSession>,
+    /// Per-layer fingerprints of the inputs `sim3d` was dressed from (see `sim_layer_keys`).
+    sim_keys: Vec<(u8, u64)>,
+    /// Parts of the opened `.modelist` file this build does not interpret (kept for saving).
+    container_extras: Vec<ContainerPart>,
     solve_ms: f64,
     op_counter: u64,
 }
@@ -292,6 +297,8 @@ impl ModelistSession {
             walk_frame: None,
             show_mirror_unfold: true,
             sim3d: None,
+            sim_keys: Vec::new(),
+            container_extras: Vec::new(),
             solve_ms: 0.0,
             op_counter: 1,
         };
@@ -328,42 +335,70 @@ impl ModelistSession {
     pub fn add_component(&mut self, template_id: &str, name: &str) -> String {
         self.push_undo();
         let tmpl = modelist_core::library::resolve_template_id(template_id);
-        let taken: HashSet<Uuid> = self.project.components.iter().map(|c| c.id).collect();
-        let seq = (1..)
-            .find(|n| !taken.contains(&det_id(&format!("component:{tmpl}:{n}"))))
-            .unwrap_or(1);
-        let max_x = self
-            .evaluated
-            .iter()
-            .flat_map(|e| e.cut_polyline.iter().chain(&e.seam_polyline).map(|p| p.x))
-            .fold(f64::NEG_INFINITY, f64::max);
-        // The template's own pieces start near x = 0: shift it past the existing ones.
-        let probe = modelist_core::library::new_component(tmpl, seq, modelist_core::model::Point2::ZERO);
-        let (probe_pieces, _, _, _) = modelist_core::blocks::build_component_pieces(&probe, &self.project.measurements);
-        let min_x = probe_pieces
-            .iter()
-            .flat_map(|p| p.seam_loop.edges.iter().map(|e| e.start.x))
-            .fold(f64::INFINITY, f64::min);
-        let dx = if max_x.is_finite() && min_x.is_finite() { max_x + 250.0 - min_x } else { 0.0 };
-        let mut comp = modelist_core::library::new_component(tmpl, seq, modelist_core::model::Point2::new(dx, 0.0));
-        comp.layer = self.project.components.iter().map(|c| c.layer).max().map(|l| l.saturating_add(1)).unwrap_or(0);
+        let seq = self.free_component_seq(tmpl);
+        let mut comp = modelist_core::library::new_component(tmpl, seq, modelist_core::model::Point2::ZERO);
         if !name.trim().is_empty() {
             comp.name = name.trim().to_string();
         }
-        let id = comp.id.to_string();
-        self.project.components.push(comp);
-        self.project.active_component = self.project.components.len() - 1;
-        self.walk_frame = None;
-        self.selected_edge = None;
-        self.recompute();
-        self.selected_piece = self
-            .evaluated
-            .iter()
-            .zip(&self.piece_component)
-            .find(|(_, &c)| c == self.project.active_component)
-            .map(|(e, _)| e.piece.id);
-        self.rebuild_render_buffers();
-        id
+        self.place_component(comp)
+    }
+
+    /// Adds a copy of a garment (same template, ease, formulas, fabrics and history) beside the
+    /// others, one layer up. Returns the copy's id.
+    pub fn duplicate_component(&mut self, component_id: &str) -> String {
+        let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) else {
+            return String::new();
+        };
+        self.push_undo();
+        let src = self.project.components[ci].clone();
+        let ns = format!("component:{}:{}", src.template_id, self.free_component_seq(&src.template_id));
+        let mut copy = modelist_core::library::relocate_component(&src, &ns, &self.project.measurements);
+        copy.name = format!("{} (2)", src.name);
+        self.place_component(copy)
+    }
+
+    /// One garment as its own `.modelist` file (for the garment library or to share), on the
+    /// current body. `thumbnail_png` may be empty.
+    pub fn export_component_file(&self, component_id: &str, thumbnail_png: &[u8]) -> Result<Vec<u8>, JsValue> {
+        let Some(ci) = Uuid::parse_str(component_id).ok().and_then(|id| self.project.component_index(id)) else {
+            return Err(JsValue::from_str("unknown garment"));
+        };
+        let comp = self.project.components[ci].clone();
+        let mut single = self.project.clone();
+        single.id = det_id(&format!("garment-file:{}", comp.id));
+        single.name = comp.name.clone();
+        single.components = vec![comp];
+        single.active_component = 0;
+        write_container(
+            &single,
+            &WriteOptions {
+                writer_version: env!("CARGO_PKG_VERSION"),
+                thumbnail_png: (!thumbnail_png.is_empty()).then_some(thumbnail_png),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Adds the garments of a `.modelist` file (a saved garment, or every garment of another
+    /// project) beside the others. They are refitted to this document's body. Returns the id of
+    /// the last one added (it becomes the active garment).
+    pub fn insert_component_file(&mut self, bytes: &[u8]) -> Result<String, JsValue> {
+        let source = if is_container(bytes) {
+            read_container(bytes).map_err(|e| JsValue::from_str(&e))?.project
+        } else {
+            let text = std::str::from_utf8(bytes).map_err(|_| JsValue::from_str("not a .modelist file"))?;
+            PatternProject::from_json(text).map_err(|e| JsValue::from_str(&e))?
+        };
+        self.push_undo();
+        let mut last = String::new();
+        for mut comp in source.components {
+            comp.normalize_fabrics();
+            let ns = format!("component:{}:{}", comp.template_id, self.free_component_seq(&comp.template_id));
+            let moved = modelist_core::library::relocate_component(&comp, &ns, &source.measurements);
+            last = self.place_component(moved);
+        }
+        Ok(last)
     }
 
     /// Removes a garment (the last one cannot be removed).
@@ -466,8 +501,102 @@ impl ModelistSession {
     }
 
     pub fn load_project_json(&mut self, json: &str) -> Result<(), JsValue> {
-        let mut parsed = PatternProject::from_json(json)
+        let parsed = PatternProject::from_json(json)
             .map_err(|e| JsValue::from_str(&format!("Invalid .modelist file: {e}")))?;
+        self.container_extras.clear();
+        self.install_project(parsed);
+        Ok(())
+    }
+
+    /// Writes the project as a `.modelist` container (ZIP of JSON parts, see
+    /// `modelist_core::container`). `modified` is the save time (ISO 8601) and `session_json`
+    /// the UI state to restore; both may be empty, like `thumbnail_png`. Parts of the opened
+    /// file this build does not know are written back unchanged.
+    pub fn save_project_container(
+        &self,
+        modified: &str,
+        session_json: &str,
+        thumbnail_png: &[u8],
+    ) -> Result<Vec<u8>, JsValue> {
+        write_container(
+            &self.project,
+            &WriteOptions {
+                writer_version: env!("CARGO_PKG_VERSION"),
+                modified: (!modified.is_empty()).then_some(modified),
+                session_json: (!session_json.is_empty()).then_some(session_json),
+                thumbnail_png: (!thumbnail_png.is_empty()).then_some(thumbnail_png),
+                extra_parts: &self.container_extras,
+            },
+        )
+        .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Opens a project file: a `.modelist` container, or plain JSON (`.modelist.json`, any
+    /// format version). Returns the saved UI state (`session.json`), or an empty string.
+    pub fn load_project_file(&mut self, bytes: &[u8]) -> Result<String, JsValue> {
+        if is_container(bytes) {
+            let opened = read_container(bytes)
+                .map_err(|e| JsValue::from_str(&format!("Invalid .modelist file: {e}")))?;
+            self.container_extras = opened.extra_parts;
+            self.install_project(opened.project);
+            Ok(opened.session_json.unwrap_or_default())
+        } else {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| JsValue::from_str("Invalid .modelist file: neither a container nor JSON text"))?;
+            self.load_project_json(text)?;
+            Ok(String::new())
+        }
+    }
+}
+
+impl ModelistSession {
+    /// First sequence number whose component id and ID namespace are free for a template.
+    fn free_component_seq(&self, tmpl: &str) -> usize {
+        (1..)
+            .find(|n| {
+                let ns = format!("component:{tmpl}:{n}");
+                let id = det_id(&format!("component:{tmpl}:{n}"));
+                let ns_id = det_id(&ns);
+                self.project.components.iter().all(|c| c.id != id && c.id != ns_id && c.id_ns != ns)
+            })
+            .unwrap_or(1)
+    }
+
+    /// Adds a garment to the right of the others on the canvas and one layer above them in the
+    /// 3D fit, makes it active and selects its first piece. Returns its id.
+    fn place_component(&mut self, mut comp: modelist_core::model::GarmentComponent) -> String {
+        let max_x = self
+            .evaluated
+            .iter()
+            .flat_map(|e| e.cut_polyline.iter().chain(&e.seam_polyline).map(|p| p.x))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let (pieces, _, _, _) = modelist_core::blocks::build_component_pieces(&comp, &self.project.measurements);
+        let min_x = pieces
+            .iter()
+            .flat_map(|p| p.seam_loop.edges.iter().map(|e| e.start.x))
+            .fold(f64::INFINITY, f64::min);
+        if max_x.is_finite() && min_x.is_finite() {
+            modelist_core::library::shift_component(&mut comp, max_x + 250.0 - min_x, 0.0);
+        }
+        comp.layer = self.project.components.iter().map(|c| c.layer).max().map(|l| l.saturating_add(1)).unwrap_or(0);
+        comp.visible = true;
+        let id = comp.id.to_string();
+        self.project.components.push(comp);
+        self.project.active_component = self.project.components.len() - 1;
+        self.walk_frame = None;
+        self.selected_edge = None;
+        self.recompute();
+        self.selected_piece = self
+            .evaluated
+            .iter()
+            .zip(&self.piece_component)
+            .find(|(_, &c)| c == self.project.active_component)
+            .map(|(e, _)| e.piece.id);
+        self.rebuild_render_buffers();
+        id
+    }
+
+    fn install_project(&mut self, mut parsed: PatternProject) {
         parsed.normalize_fabrics();
         parsed.sync_fabric_variables();
         self.push_undo();
@@ -477,8 +606,11 @@ impl ModelistSession {
         self.recompute();
         self.selected_piece = self.evaluated.first().map(|e| e.piece.id);
         self.rebuild_render_buffers();
-        Ok(())
     }
+}
+
+#[wasm_bindgen]
+impl ModelistSession {
 
     pub fn set_measurement(&mut self, key: &str, val: f64) {
         if !self.project.measurements.set_by_key(key, val) {
@@ -1524,7 +1656,7 @@ impl ModelistSession {
             "neutral" => AvatarBodyForm::Neutral,
             _ => AvatarBodyForm::Female,
         };
-        let sim = self.build_sim(avatar_pose, avatar_form);
+        let sim = self.build_sim(avatar_pose, avatar_form, None);
         let stats_json = serde_json::to_string(&sim.stats()).unwrap_or_else(|_| "{}".into());
         self.sim3d = Some(sim);
         stats_json
@@ -2166,15 +2298,22 @@ impl ModelistSession {
         if let Some(prev_sim) = self.sim3d.take() {
             let pose = prev_sim.avatar.pose;
             let body_form = prev_sim.avatar.body_form;
-            self.sim3d = Some(self.build_sim(pose, body_form));
+            self.sim3d = Some(self.build_sim(pose, body_form, Some(prev_sim)));
         }
 
         self.solve_ms = (now_ms() - t0).max(0.01);
     }
 
     /// The 3D fit of every garment: each one dressed at its component's layer, with its own
-    /// fabrics (roles qualified by garment).
-    fn build_sim(&self, pose: AvatarPose, body_form: AvatarBodyForm) -> ClothSimSession {
+    /// fabrics (roles qualified by garment). With the previous fit, only the layers whose inputs
+    /// changed are dressed again (the ones under them keep their drape); when nothing the 3D fit
+    /// depends on changed, the previous fit is kept as it is.
+    fn build_sim(
+        &mut self,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+        prev: Option<ClothSimSession>,
+    ) -> ClothSimSession {
         let mut pieces = Vec::with_capacity(self.evaluated.len());
         let mut layers = Vec::with_capacity(self.evaluated.len());
         for (ei, ep) in self.evaluated.iter().enumerate() {
@@ -2184,15 +2323,105 @@ impl ModelistSession {
             pieces.push(p);
             layers.push(self.project.components.get(ci).map(|c| c.layer).unwrap_or(0));
         }
-        ClothSimSession::start_dressing(
-            &pieces,
-            &layers,
-            &self.stitching,
-            &self.project.measurements,
-            &MaterialSet::from_project(&self.project),
+        let keys = self.sim_layer_keys(&pieces, &layers, pose, body_form);
+        let materials = MaterialSet::from_project(&self.project);
+        let sim = match prev {
+            Some(prev) if keys == self.sim_keys => prev,
+            Some(prev) => {
+                let changed = keys
+                    .iter()
+                    .zip(&self.sim_keys)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(keys.len().min(self.sim_keys.len()));
+                match keys.get(changed) {
+                    Some(&(level, _)) if changed > 0 => ClothSimSession::redress_from(
+                        &prev,
+                        level,
+                        &pieces,
+                        &layers,
+                        &self.stitching,
+                        &self.project.measurements,
+                        &materials,
+                        pose,
+                        body_form,
+                    ),
+                    _ => ClothSimSession::start_dressing(
+                        &pieces,
+                        &layers,
+                        &self.stitching,
+                        &self.project.measurements,
+                        &materials,
+                        pose,
+                        body_form,
+                    ),
+                }
+            }
+            None => ClothSimSession::start_dressing(
+                &pieces,
+                &layers,
+                &self.stitching,
+                &self.project.measurements,
+                &materials,
+                pose,
+                body_form,
+            ),
+        };
+        self.sim_keys = keys;
+        sim
+    }
+
+    /// Fingerprint of everything the 3D fit of each layer depends on (inner layer first): its
+    /// pieces, the seams touching them, its garments' fabrics, plus the body and pose.
+    fn sim_layer_keys(
+        &self,
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+    ) -> Vec<(u8, u64)> {
+        use std::hash::{Hash, Hasher};
+        let mut levels: Vec<u8> = layers.to_vec();
+        levels.sort_unstable();
+        levels.dedup();
+        let common = format!(
+            "{}|{:?}|{:?}",
+            serde_json::to_string(&self.project.measurements).unwrap_or_default(),
             pose,
-            body_form,
-        )
+            body_form
+        );
+        levels
+            .into_iter()
+            .map(|level| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                common.hash(&mut h);
+                let ids: HashSet<Uuid> = pieces
+                    .iter()
+                    .zip(layers)
+                    .filter(|(_, &l)| l == level)
+                    .map(|(p, _)| p.id)
+                    .collect();
+                for (p, &l) in pieces.iter().zip(layers) {
+                    if l == level {
+                        serde_json::to_string(p).unwrap_or_default().hash(&mut h);
+                    }
+                }
+                for b in &self.stitching.bindings {
+                    let touches = b
+                        .interface_a
+                        .edges
+                        .iter()
+                        .chain(&b.interface_b.edges)
+                        .any(|e| ids.contains(&e.piece_id));
+                    if touches {
+                        serde_json::to_string(b).unwrap_or_default().hash(&mut h);
+                    }
+                }
+                for c in self.project.components.iter().filter(|c| c.layer == level) {
+                    serde_json::to_string(&(&c.fabric, &c.role_fabrics)).unwrap_or_default().hash(&mut h);
+                }
+                (level, h.finish())
+            })
+            .collect()
     }
 
     fn rebuild_render_buffers(&mut self) {
@@ -2351,5 +2580,76 @@ mod component_tests {
         // Hidden everywhere: its pieces leave the canvas and the 3D fit.
         s.set_component_visible(&outer, false);
         assert!(s.evaluated.iter().zip(&s.piece_component).all(|(e, &c)| e.piece.visible == (c == 0)));
+    }
+
+    #[test]
+    fn editing_the_outer_garment_keeps_the_inner_drape() {
+        let mut s = ModelistSession::new("boxy_tee");
+        let trousers = s.add_component("wide_pleat_trouser", "");
+        s.set_component_layer(&trousers, 1);
+        s.init_sim3d("a_pose", "female");
+        while s.sim3d.as_ref().unwrap().dressing_progress().is_some() {
+            s.step_sim3d(4);
+        }
+        let inner = s.sim3d.as_ref().unwrap().vertex_layers().iter().filter(|&&l| l == 0).count();
+        let before: Vec<f32> = s.sim3d.as_ref().unwrap().flat_positions[..inner * 3].to_vec();
+        let steps_before = s.sim3d.as_ref().unwrap().stats().step_count;
+
+        // Renaming does not touch the 3D fit: it is kept as it is.
+        s.rename_component(&trousers, "Wide trousers");
+        s.set_component_layer(&trousers, 1);
+        assert_eq!(s.sim3d.as_ref().unwrap().stats().step_count, steps_before);
+
+        // An ease change on the trousers re-dresses the trousers only.
+        s.set_active_component(&trousers);
+        s.set_variable("wt_leg_opening", "720", "Hem circumference (mm)");
+        let sim = s.sim3d.as_ref().unwrap();
+        assert_eq!(sim.dressing_progress(), Some((2, 2)));
+        assert_eq!(&sim.flat_positions[..inner * 3], &before[..], "the tee keeps its drape");
+    }
+
+    #[test]
+    fn a_container_file_reopens_with_every_garment() {
+        let mut s = ModelistSession::new("boxy_tee");
+        s.add_component("wide_pleat_trouser", "Trousers");
+        let bytes = s.save_project_container("2026-11-24T12:00:00Z", r#"{"view":"split"}"#, &[]).unwrap();
+        let mut b = ModelistSession::new("bodice_sleeve");
+        let session = b.load_project_file(&bytes).unwrap();
+        assert_eq!(session, r#"{"view":"split"}"#);
+        assert_eq!(b.project, s.project);
+        assert_eq!(b.evaluated.len(), s.evaluated.len());
+        // Plain JSON (old files, the debug export) still opens through the same call.
+        let mut c = ModelistSession::new("bodice_sleeve");
+        c.load_project_file(s.serialize_project_json().as_bytes()).unwrap();
+        assert_eq!(c.project.components.len(), 2);
+    }
+
+    #[test]
+    fn a_saved_garment_inserts_into_another_document_with_its_history() {
+        let mut a = ModelistSession::new("boxy_tee");
+        let piece = a.evaluated[0].piece.id.to_string();
+        a.add_notch(&piece, 0, 0.5, "v", 1, 6.0);
+        let tee = a.project.components[0].id.to_string();
+        let file = a.export_component_file(&tee, &[]).unwrap();
+
+        let mut b = ModelistSession::new("wide_pleat_trouser");
+        let before = b.evaluated.len();
+        b.insert_component_file(&file).unwrap();
+        b.insert_component_file(&file).unwrap();
+        assert_eq!(b.project.components.len(), 3, "the same garment can be inserted twice");
+        assert_eq!(b.project.components[1].ops.len(), 1, "its history comes with it");
+        let ids: HashSet<Uuid> = b.evaluated.iter().map(|e| e.piece.id).collect();
+        assert_eq!(ids.len(), b.evaluated.len());
+        assert!(b.evaluated.len() > before);
+        let notches = |c: usize| {
+            b.evaluated.iter().zip(&b.piece_component).filter(|(_, &k)| k == c).map(|(e, _)| e.projected_notches.len()).sum::<usize>()
+        };
+        assert_eq!(notches(1), notches(2));
+        // Duplicating works the same way; undo removes the duplicate.
+        let dup = b.duplicate_component(&b.project.components[1].id.to_string());
+        assert!(!dup.is_empty());
+        assert_eq!(b.project.components.len(), 4);
+        b.undo();
+        assert_eq!(b.project.components.len(), 3);
     }
 }

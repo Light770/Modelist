@@ -4,19 +4,73 @@
  */
 import { closeDocument, getActiveDocumentId, kernel, openDocument, switchDocument } from './kernelClient';
 import type { UiSnapshot } from './types';
-import { openTextFileFromDisk, saveProjectToDisk } from './localFiles';
+import { openBinaryFileFromDisk, openTextFileFromDisk, saveProjectJsonToDisk, saveProjectToDisk } from './localFiles';
 import { t, tCatalog } from './i18n';
+import { deleteSavedGarment, getSavedGarment, saveGarment } from './garmentLibrary';
 import { useStudioStore } from '../store/studioStore';
 
 /** Modifier-key label for shortcut hints ("⌘" on macOS, "Ctrl+" elsewhere). */
 export const MOD_LABEL =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.userAgent) ? '⌘' : 'Ctrl+';
 
+/** A small PNG of the 2D canvas for the file's preview (empty when there is no canvas). */
+export async function canvasThumbnail(maxSize = 320): Promise<Uint8Array> {
+  const src = document.querySelector<HTMLCanvasElement>('canvas[data-viewport2d]');
+  if (!src || !src.width || !src.height) return new Uint8Array();
+  const k = Math.min(1, maxSize / Math.max(src.width, src.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(src.width * k));
+  c.height = Math.max(1, Math.round(src.height * k));
+  c.getContext('2d')?.drawImage(src, 0, 0, c.width, c.height);
+  const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png'));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array();
+}
+
+/** UI state saved in the file's `session.json`, restored when it is opened. */
+interface SavedSession {
+  workspace_mode?: string;
+  toolbar_tab?: string;
+  unit?: string;
+}
+
+function currentSession(): string {
+  const st = useStudioStore.getState();
+  const s: SavedSession = { workspace_mode: st.workspaceMode, toolbar_tab: st.toolbarTab, unit: st.unit };
+  return JSON.stringify(s);
+}
+
+function restoreSession(json: string) {
+  if (!json) return;
+  try {
+    const s = JSON.parse(json) as SavedSession;
+    const st = useStudioStore.getState();
+    if (s.workspace_mode === '2d' || s.workspace_mode === '3d' || s.workspace_mode === 'split') st.setWorkspaceMode(s.workspace_mode);
+    if (s.unit === 'mm' || s.unit === 'cm' || s.unit === 'in') st.setUnit(s.unit);
+    if (s.toolbar_tab) st.setToolbarTab(s.toolbar_tab as never);
+  } catch {
+    // UI state is optional.
+  }
+}
+
+/** Saves the document as a `.modelist` file (ZIP container with a preview). */
 export async function saveProject(): Promise<void> {
   const st = useStudioStore.getState();
   if (!st.snapshot) return;
   try {
-    const savedName = await saveProjectToDisk(st.snapshot.project_name, kernel.serializeProject());
+    const bytes = kernel.saveProjectContainer(currentSession(), await canvasThumbnail());
+    const savedName = await saveProjectToDisk(st.snapshot.project_name, bytes);
+    st.setStatusMessage(t('topbar.saved', { name: savedName }));
+  } catch (e) {
+    if ((e as Error)?.name !== 'AbortError') st.setStatusMessage(t('topbar.saveFailed', { error: (e as Error).message }));
+  }
+}
+
+/** Saves the whole document as one JSON file (debugging, version control). */
+export async function exportProjectJson(): Promise<void> {
+  const st = useStudioStore.getState();
+  if (!st.snapshot) return;
+  try {
+    const savedName = await saveProjectJsonToDisk(st.snapshot.project_name, kernel.serializeProject());
     st.setStatusMessage(t('topbar.saved', { name: savedName }));
   } catch {
     // Save dialog cancelled
@@ -55,6 +109,79 @@ export function addGarment(templateId: string): void {
   st.requestFitView();
 }
 
+/** Adds a copy of a garment (with its history) beside the others. */
+export function duplicateGarment(componentId: string): void {
+  const st = useStudioStore.getState();
+  st.setSnapshot(kernel.duplicateComponent(componentId));
+  st.requestFitView();
+}
+
+/** Saves a garment to the local garment library (with a preview of the canvas). */
+export async function saveGarmentToLibrary(componentId: string): Promise<void> {
+  const st = useStudioStore.getState();
+  const comp = st.snapshot?.components.find((c) => c.id === componentId);
+  if (!comp) return;
+  try {
+    const thumbnail = await canvasThumbnail(240);
+    const bytes = kernel.exportComponentFile(componentId, thumbnail);
+    await saveGarment({ name: comp.name, template_id: comp.template_id, thumbnail, bytes });
+    st.bumpLibrary();
+    st.setStatusMessage(t('status.garmentSaved', { name: comp.name }));
+  } catch (e) {
+    st.setStatusMessage(t('topbar.saveFailed', { error: (e as Error).message }));
+  }
+}
+
+/** Inserts a garment from the library into the open document, refitted to its body. */
+export async function insertSavedGarment(entryId: string): Promise<void> {
+  const st = useStudioStore.getState();
+  const entry = await getSavedGarment(entryId);
+  if (!entry) return;
+  try {
+    st.setSnapshot(kernel.insertComponentFile(entry.bytes));
+    st.setStatusMessage(t('status.garmentInserted', { name: entry.name }));
+    st.requestFitView();
+  } catch (e) {
+    st.setStatusMessage(t('topbar.openFailed', { error: (e as Error).message }));
+  }
+}
+
+/** Writes a saved garment, or a garment of the document, to a `.modelist` file. */
+export async function exportGarmentFile(source: { entryId?: string; componentId?: string }): Promise<void> {
+  const st = useStudioStore.getState();
+  try {
+    if (source.entryId) {
+      const entry = await getSavedGarment(source.entryId);
+      if (entry) await saveProjectToDisk(entry.name, entry.bytes);
+    } else if (source.componentId) {
+      const comp = st.snapshot?.components.find((c) => c.id === source.componentId);
+      const bytes = kernel.exportComponentFile(source.componentId, await canvasThumbnail(240));
+      await saveProjectToDisk(comp?.name ?? 'garment', bytes);
+    }
+  } catch {
+    // Save dialog cancelled
+  }
+}
+
+/** Adds the garments of a `.modelist` file to the open document. */
+export async function importGarmentFile(): Promise<void> {
+  const file = await openBinaryFileFromDisk('.modelist,.json');
+  if (!file) return;
+  const st = useStudioStore.getState();
+  try {
+    st.setSnapshot(kernel.insertComponentFile(file.bytes));
+    st.setStatusMessage(t('status.garmentInserted', { name: file.name }));
+    st.requestFitView();
+  } catch (e) {
+    st.setStatusMessage(t('topbar.openFailed', { error: (e as Error).message }));
+  }
+}
+
+export async function deleteLibraryGarment(entryId: string): Promise<void> {
+  await deleteSavedGarment(entryId);
+  useStudioStore.getState().bumpLibrary();
+}
+
 export function removeGarment(componentId: string): void {
   const st = useStudioStore.getState();
   st.setSnapshot(kernel.removeComponent(componentId));
@@ -69,14 +196,15 @@ export async function newFromTemplate(templateId: string): Promise<void> {
 }
 
 export async function openProject(): Promise<void> {
-  const file = await openTextFileFromDisk('.modelist.json,.modelist,.json');
+  const file = await openBinaryFileFromDisk('.modelist,.json');
   if (!file) return;
   const st = useStudioStore.getState();
   try {
     const previousId = getActiveDocumentId();
     const { id } = await openDocument('bodice_sleeve');
+    let session = '';
     try {
-      kernel.loadProjectJson(file.text);
+      session = kernel.loadProjectFile(file.bytes).session;
     } catch (e) {
       // Drop the new tab and go back to the document that was open.
       closeDocument(id);
@@ -84,6 +212,7 @@ export async function openProject(): Promise<void> {
       throw e;
     }
     showDocument(kernel.setSelection(null, null), id);
+    restoreSession(session);
     st.setStatusMessage(t('topbar.opened', { name: file.name }));
   } catch (e) {
     st.setStatusMessage(t('topbar.openFailed', { error: (e as Error).message }));

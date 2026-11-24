@@ -829,6 +829,8 @@ struct DressPlan {
     stage: usize,
     /// Inverse masses to restore when the stage ends (the lower layers are frozen meanwhile).
     saved_inv_mass: Vec<f32>,
+    /// Largest seam gap at the last check of the gentle sewing phase, mm.
+    last_gap_mm: f32,
 }
 
 /// One-sided contact between a cloth vertex and a triangle of another garment layer.
@@ -1001,10 +1003,62 @@ impl ClothSimSession {
             levels,
             stage: 0,
             saved_inv_mass: Vec::new(),
+            last_gap_mm: f32::INFINITY,
         };
         let mut sim = Self::dress_stage(plan, 0, &[]);
         while sim.dress.as_ref().map(|d| d.stage == 0).unwrap_or(false) {
             sim.step(1);
+        }
+        sim
+    }
+
+    /// Dresses the outfit again after an edit, keeping every layer below `from_level` exactly
+    /// where it settled in `prev`. Lower layers never feel the ones above them (they have
+    /// priority), so this gives the same drape as dressing from scratch, minus the waiting.
+    ///
+    /// The caller guarantees that the pieces, fabrics, body and pose of those lower layers are
+    /// unchanged (same pieces in the same order). Falls back to [`Self::start_dressing`] when
+    /// `prev` is still dressing or nothing below `from_level` can be kept.
+    #[allow(clippy::too_many_arguments)]
+    pub fn redress_from(
+        prev: &ClothSimSession,
+        from_level: u8,
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        stitching: &StitchingGraph,
+        measurements: &BodyMeasurements,
+        materials: &MaterialSet,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+    ) -> Self {
+        let layer_of = |pi: usize| layers.get(pi).copied().unwrap_or(0);
+        let mut levels: Vec<u8> = (0..pieces.len()).filter(|&i| pieces[i].visible).map(layer_of).collect();
+        levels.sort_unstable();
+        levels.dedup();
+        let stage = levels.iter().position(|&l| l >= from_level).unwrap_or(levels.len());
+        if prev.dress.is_some() || stage == 0 || stage >= levels.len() {
+            return Self::start_dressing(pieces, layers, stitching, measurements, materials, pose, body_form);
+        }
+        let keep_below = levels[stage];
+        let prefix = prev.vert_layer.iter().take_while(|&&l| l < keep_below).count();
+        let settled = prev.core.pos[..prefix].to_vec();
+        let plan = DressPlan {
+            pieces: pieces.to_vec(),
+            layers: (0..pieces.len()).map(layer_of).collect(),
+            stitching: stitching.clone(),
+            measurements: measurements.clone(),
+            materials: materials.clone(),
+            pose,
+            body_form,
+            levels,
+            stage,
+            saved_inv_mass: Vec::new(),
+            last_gap_mm: f32::INFINITY,
+        };
+        let sim = Self::dress_stage(plan, stage, &settled);
+        if sim.core.pos.len() < prefix {
+            // The kept layers do not match this outfit after all: dress from scratch.
+            return Self::start_dressing(pieces, layers, stitching, measurements, materials, pose, body_form);
         }
         sim
     }
@@ -1039,6 +1093,7 @@ impl ClothSimSession {
         sim.sew_frames = SEW_FRAMES;
         plan.stage = stage;
         plan.saved_inv_mass = saved;
+        plan.last_gap_mm = f32::INFINITY;
         sim.dress = Some(Box::new(plan));
         sim
     }
@@ -1046,18 +1101,26 @@ impl ClothSimSession {
     /// Called after every frame while dressing: gentle sewing lasts until the new layer's seams
     /// meet (bounded), then it settles; at the end of a stage the next layer is put on.
     fn advance_dressing(&mut self) {
-        let Some(plan) = self.dress.as_ref() else { return };
-        if self.step_count + 1 == self.sew_frames
-            && self.sew_frames < LAYER_MAX_SEW_FRAMES
-            && self.seam_gap_stats_mm().1 > LAYER_SEWN_GAP_MM
-        {
-            self.sew_frames += 5;
+        if self.dress.is_none() {
+            return;
+        }
+        if self.step_count + 1 == self.sew_frames && self.sew_frames < LAYER_MAX_SEW_FRAMES {
+            // Keep sewing gently while the seams are open and still closing; a seam that has
+            // stopped closing (an eased waistband) will not close faster by waiting.
+            let gap = self.seam_gap_stats_mm().1;
+            let closing = gap < 0.95 * self.dress.as_ref().map(|d| d.last_gap_mm).unwrap_or(f32::INFINITY);
+            if gap > LAYER_SEWN_GAP_MM && closing {
+                self.sew_frames += 5;
+            }
+            if let Some(d) = self.dress.as_mut() {
+                d.last_gap_mm = gap;
+            }
         }
         if self.step_count < self.sew_frames + SETTLE_FRAMES {
             return;
         }
-        let last = plan.stage + 1 == plan.levels.len();
         let mut plan = self.dress.take().expect("dressing plan");
+        let last = plan.stage + 1 == plan.levels.len();
         self.core.inv_mass = std::mem::take(&mut plan.saved_inv_mass);
         if last {
             return;
@@ -1827,7 +1890,8 @@ impl ClothSimSession {
             })
             .collect();
         keyed.sort_unstable_by_key(|e| e.0);
-        let mut cells: HashMap<(i32, i32, i32), (u32, u32)> = HashMap::with_capacity(keyed.len() / 4);
+        let mut cells: HashMap<(i32, i32, i32), (u32, u32), FxBuild> =
+            HashMap::with_capacity_and_hasher(keyed.len() / 4, FxBuild::default());
         let mut i = 0;
         while i < keyed.len() {
             let mut j = i + 1;
@@ -2206,6 +2270,30 @@ impl ClothSimSession {
         }
     }
 }
+
+/// Small multiplicative hasher for the per-frame grid (the default SipHash is several times
+/// slower, more so in WASM). Not DoS-resistant, which does not matter for cell keys.
+#[derive(Default, Clone, Copy)]
+struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_i32(&mut self, i: i32) {
+        self.write_u64(i as u32 as u64);
+    }
+    fn write_u64(&mut self, x: u64) {
+        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
 
 /// Projects `p` on the plane of triangle `abc` (normal `(b - a) x (c - a)`). Returns the signed
 /// distance along that normal and the barycentric coordinates of the foot, or `None` when the

@@ -11,6 +11,12 @@ rstar.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+# .modelist container (ZIP + JSON parts), part hashes, and the published JSON Schema.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+sha2 = "0.11"
+# Pure-Rust deflate backend (miniz_oxide, MIT/Apache/Zlib) so zip also builds for WASM.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+schemars = { version = "1", features = ["uuid1"] }
 
 [dev-dependencies]
 proptest.workspace = true

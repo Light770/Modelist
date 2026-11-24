@@ -614,6 +614,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_redressing_an_outer_layer_keeps_the_inner_one() {
+        use crate::material::MaterialSet;
+        let tee = draft_variant("boxy_tee", &[("tee_chest_ease", "120")], None);
+        let trousers = draft_variant("wide_pleat_trouser", &[], Some("trousers"));
+        let fabric = FabricSpec::from_preset("cotton_jersey_heavy");
+        let mats = MaterialSet::single(&fabric);
+        let m = BodyMeasurements::default();
+        let build = |trouser_pieces: &[modelist_core::model::PatternPiece]| {
+            let mut pieces = tee.0.clone();
+            let mut layers = vec![0u8; pieces.len()];
+            pieces.extend(trouser_pieces.iter().cloned());
+            layers.extend(std::iter::repeat(1u8).take(trouser_pieces.len()));
+            let mut st = tee.1.clone();
+            st.bindings.extend(trousers.1.bindings.iter().cloned());
+            (pieces, layers, st)
+        };
+        let (pieces, layers, st) = build(&trousers.0);
+        let first = ClothSimSession::new_layered(&pieces, &layers, &st, &m, &mats, AvatarPose::APose, AvatarBodyForm::Female);
+        let inner = first.vertex_layers().iter().filter(|&&l| l == 0).count();
+
+        // Edit the trousers only (a different leg opening), then re-dress from layer 1.
+        let edited = draft_variant("wide_pleat_trouser", &[("wt_leg_opening", "720")], Some("trousers"));
+        let (pieces2, layers2, st2) = build(&edited.0);
+        let t0 = std::time::Instant::now();
+        let mut again = ClothSimSession::redress_from(&first, 1, &pieces2, &layers2, &st2, &m, &mats, AvatarPose::APose, AvatarBodyForm::Female);
+        let start_time = t0.elapsed();
+        assert_eq!(again.dressing_progress(), Some((2, 2)), "dressing resumes at the trousers");
+        assert_eq!(
+            &again.flat_positions[..inner * 3],
+            &first.flat_positions[..inner * 3],
+            "the tee keeps exactly the drape it had"
+        );
+        while again.dressing_progress().is_some() {
+            again.step(1);
+        }
+        again.step(10);
+        let q = again.drape_quality();
+        eprintln!("redress start {start_time:?}, poke {}, crossings {}", q.poke_through_count, again.layer_crossings());
+        assert!(again.flat_positions.iter().all(|v| v.is_finite()));
+        assert!(again.layer_crossings() <= again.stats().vertex_count / 100);
+    }
+
     /// Writes `<base>_avatar.obj` and `<base>_cloth.obj` (5th vertex value = layer * 10).
     fn dump_obj(sim: &ClothSimSession, base: &str) {
         use std::fmt::Write as _;

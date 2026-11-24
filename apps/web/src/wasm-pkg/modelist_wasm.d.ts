@@ -22,8 +22,18 @@ export class ModelistSession {
     delete_seam_binding(binding_id: string): void;
     delete_variable(name: string): void;
     dispose_sim3d(): void;
+    /**
+     * Adds a copy of a garment (same template, ease, formulas, fabrics and history) beside the
+     * others, one layer up. Returns the copy's id.
+     */
+    duplicate_component(component_id: string): string;
     duplicate_piece(piece_id: string): void;
     export_aama_rul(): string;
+    /**
+     * One garment as its own `.modelist` file (for the garment library or to share), on the
+     * current body. `thumbnail_png` may be empty.
+     */
+    export_component_file(component_id: string, thumbnail_png: Uint8Array | number[]): Uint8Array;
     export_dxf_aama(): string;
     export_marker_svg(config_json: string): string;
     export_pom_csv(): string;
@@ -56,6 +66,17 @@ export class ModelistSession {
     import_dxf_aama(dxf_text: string): string;
     import_garmentcode_json(json_text: string): string;
     init_sim3d(pose: string, body_form: string): string;
+    /**
+     * Adds the garments of a `.modelist` file (a saved garment, or every garment of another
+     * project) beside the others. They are refitted to this document's body. Returns the id of
+     * the last one added (it becomes the active garment).
+     */
+    insert_component_file(bytes: Uint8Array | number[]): string;
+    /**
+     * Opens a project file: a `.modelist` container, or plain JSON (`.modelist.json`, any
+     * format version). Returns the saved UI state (`session.json`), or an empty string.
+     */
+    load_project_file(bytes: Uint8Array | number[]): string;
     load_project_json(json: string): void;
     load_template(template_id: string): void;
     mirror_piece(piece_id: string): void;
@@ -83,6 +104,13 @@ export class ModelistSession {
      */
     reset_fabric_to_preset(): void;
     reset_sim3d(pose: string, body_form: string): string;
+    /**
+     * Writes the project as a `.modelist` container (ZIP of JSON parts, see
+     * `modelist_core::container`). `modified` is the save time (ISO 8601) and `session_json`
+     * the UI state to restore; both may be empty, like `thumbnail_png`. Parts of the opened
+     * file this build does not know are written back unchanged.
+     */
+    save_project_container(modified: string, session_json: string, thumbnail_png: Uint8Array | number[]): Uint8Array;
     serialize_project_json(): string;
     /**
      * Makes a garment the one edits, parameters, fabrics and the timeline apply to.
@@ -182,8 +210,10 @@ export interface InitOutput {
     readonly modelistsession_delete_seam_binding: (a: number, b: number, c: number) => void;
     readonly modelistsession_delete_variable: (a: number, b: number, c: number) => void;
     readonly modelistsession_dispose_sim3d: (a: number) => void;
+    readonly modelistsession_duplicate_component: (a: number, b: number, c: number) => [number, number];
     readonly modelistsession_duplicate_piece: (a: number, b: number, c: number) => void;
     readonly modelistsession_export_aama_rul: (a: number) => [number, number];
+    readonly modelistsession_export_component_file: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly modelistsession_export_dxf_aama: (a: number) => [number, number];
     readonly modelistsession_export_marker_svg: (a: number, b: number, c: number) => [number, number];
     readonly modelistsession_export_pom_csv: (a: number) => [number, number];
@@ -209,6 +239,8 @@ export interface InitOutput {
     readonly modelistsession_import_dxf_aama: (a: number, b: number, c: number) => [number, number, number, number];
     readonly modelistsession_import_garmentcode_json: (a: number, b: number, c: number) => [number, number, number, number];
     readonly modelistsession_init_sim3d: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly modelistsession_insert_component_file: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly modelistsession_load_project_file: (a: number, b: number, c: number) => [number, number, number, number];
     readonly modelistsession_load_project_json: (a: number, b: number, c: number) => [number, number];
     readonly modelistsession_load_template: (a: number, b: number, c: number) => void;
     readonly modelistsession_mirror_piece: (a: number, b: number, c: number) => void;
@@ -226,6 +258,7 @@ export interface InitOutput {
     readonly modelistsession_reorder_op: (a: number, b: number, c: number) => number;
     readonly modelistsession_reset_fabric_to_preset: (a: number) => void;
     readonly modelistsession_reset_sim3d: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly modelistsession_save_project_container: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly modelistsession_serialize_project_json: (a: number) => [number, number];
     readonly modelistsession_set_active_component: (a: number, b: number, c: number) => void;
     readonly modelistsession_set_active_size: (a: number, b: number, c: number) => void;
@@ -266,6 +299,8 @@ export interface InitOutput {
     readonly modelistsession_update_seam_binding: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly modelistsession_upsert_seam_binding: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
     readonly template_catalog_json: () => [number, number];
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

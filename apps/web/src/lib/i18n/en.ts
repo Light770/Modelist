@@ -836,6 +836,24 @@ export const en = {
   'status.garmentRemoved': 'Garment removed',
   'panel.garmentScope': 'Applies to {name}',
   'status.dressing': 'Dressing layer {layer} of {count}',
+
+  // --- Project file ---
+  'appbar.exportJson': 'Export as JSON…',
+  'appbar.exportJsonDesc': 'The whole document as one JSON file, for debugging or version control. Use Save for the .modelist file.',
+  'topbar.saveFailed': 'Could not save: {error}',
+
+  // --- Garment library ---
+  'library.myGarments': 'My garments',
+  'library.empty': 'Garments you save from a document appear here, ready to insert into any project (refitted to its body).',
+  'library.insert': 'Insert into this document',
+  'library.export': 'Save as a .modelist file',
+  'library.delete': 'Delete from the library',
+  'library.importFile': 'Import a garment file…',
+  'library.savedOn': 'Saved {date}',
+  'left.saveToLibrary': 'Save to my garments (reuse in other projects)',
+  'left.duplicateGarment': 'Duplicate garment (with its history)',
+  'status.garmentSaved': '{name} saved to My garments',
+  'status.garmentInserted': '{name} inserted',
 } as const;
 
 export type MessageKey = keyof typeof en;
