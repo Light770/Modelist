@@ -22,6 +22,53 @@ const ROW_WINDOW: f32 = 0.012;
 const D_SLOPE: f32 = 0.30;
 const WRAP_SAMPLES: usize = 144;
 
+/// Cloth already placed on lower garment layers, grouped by where it sits, so an outer layer can
+/// be wrapped around it instead of around the bare body (see `xpbd` layering).
+#[derive(Default)]
+pub(crate) struct InnerShell {
+    /// Torso and skirt panel vertices.
+    pub torso: Vec<Vec3>,
+    /// Sleeve vertices, wearer's left (+X) then right.
+    pub sleeves: [Vec<Vec3>; 2],
+    /// Trouser leg vertices.
+    pub legs: Vec<Vec3>,
+    /// Clearance an outer layer keeps from this cloth when placed, m.
+    pub gap: f32,
+}
+
+impl InnerShell {
+    pub fn add(&mut self, zone: ArrangementZone, pts: &[Vec3]) {
+        match zone {
+            ArrangementZone::FrontTorso
+            | ArrangementZone::BackTorso
+            | ArrangementZone::FrontSkirt
+            | ArrangementZone::BackSkirt => self.torso.extend_from_slice(pts),
+            ArrangementZone::SleeveLeft => self.sleeves[0].extend_from_slice(pts),
+            ArrangementZone::SleeveRight => self.sleeves[1].extend_from_slice(pts),
+            ArrangementZone::FrontLeg | ArrangementZone::BackLeg => self.legs.extend_from_slice(pts),
+            ArrangementZone::FlatCustom => {}
+        }
+    }
+
+    /// Largest distance from `center` (perpendicular to `axis`) of the shell points in the slab
+    /// `|(q - center) . axis| < half_slab`, ignoring points further than `max_r`.
+    fn radius_around(pts: &[Vec3], center: Vec3, axis: Vec3, half_slab: f32, max_r: f32) -> f32 {
+        let mut r = 0.0_f32;
+        for q in pts {
+            let d = q.sub(center);
+            let along = d.dot(axis);
+            if along.abs() >= half_slab {
+                continue;
+            }
+            let radial = d.sub(axis.scale(along)).len();
+            if radial < max_r {
+                r = r.max(radial);
+            }
+        }
+        r
+    }
+}
+
 pub(crate) struct ArrangeCtx {
     /// Highest 2D y over all torso pieces (high point shoulder), mm.
     pub torso_top_mm: f64,
@@ -38,14 +85,21 @@ pub(crate) fn place_panel(
     side: f32,
     spawn_pair: bool,
     ctx: &ArrangeCtx,
+    inner: &InnerShell,
 ) -> Vec<Vec3> {
     match zone {
         ArrangementZone::FrontTorso
         | ArrangementZone::BackTorso
         | ArrangementZone::FrontSkirt
-        | ArrangementZone::BackSkirt => wrap_panel(avatar, pm, piece, zone, side, spawn_pair, ctx),
-        ArrangementZone::SleeveLeft | ArrangementZone::SleeveRight => place_sleeve(avatar, pm, zone),
-        ArrangementZone::FrontLeg | ArrangementZone::BackLeg => place_leg(avatar, pm, zone, side),
+        | ArrangementZone::BackSkirt => {
+            wrap_panel(avatar, pm, piece, zone, side, spawn_pair, ctx, inner)
+        }
+        ArrangementZone::SleeveLeft | ArrangementZone::SleeveRight => {
+            place_sleeve(avatar, pm, zone, inner)
+        }
+        ArrangementZone::FrontLeg | ArrangementZone::BackLeg => {
+            place_leg(avatar, pm, zone, side, inner)
+        }
         ArrangementZone::FlatCustom => place_flat(avatar, pm),
     }
 }
@@ -139,6 +193,7 @@ fn wrap_panel(
     side: f32,
     spawn_pair: bool,
     ctx: &ArrangeCtx,
+    inner: &InnerShell,
 ) -> Vec<Vec3> {
     let is_front = matches!(zone, ArrangementZone::FrontTorso | ArrangementZone::FrontSkirt);
     let is_skirt = matches!(zone, ArrangementZone::FrontSkirt | ArrangementZone::BackSkirt);
@@ -187,7 +242,10 @@ fn wrap_panel(
     let n_bins = (((y_max - y_min) / ROW_BIN).ceil() as usize + 1).max(1);
 
     // Smooth per-row body ellipses (contain the true section), one per height bin.
-    let ellipses = row_ellipses(avatar, y_min, n_bins, yc_lo, yc_hi);
+    let mut ellipses = row_ellipses(avatar, y_min, n_bins, yc_lo, yc_hi);
+    if !inner.torso.is_empty() {
+        enclose_inner_layer(&mut ellipses, y_min, &inner.torso, &inner.sleeves, inner.gap);
+    }
     let q0: Vec<f32> = ellipses
         .iter()
         .map(|e| e.arc_to_side(is_front, 0.0))
@@ -284,6 +342,67 @@ impl RowEllipse {
     /// Arc length from the centre line to the side seam position (quarter turn).
     fn arc_to_side(&self, front: bool, d: f32) -> f32 {
         self.path(front, true, d).quarter()
+    }
+}
+
+/// Grows each row's body ellipse so it also contains the inner layer's cloth at that height
+/// (plus `gap`). The outer panel is then wrapped by arc length around the inner garment, which
+/// keeps the placement isometric: a tighter outer garment covers less of the turn and its side
+/// seams start apart, to be closed by sewing, instead of starting inside the inner layer.
+fn enclose_inner_layer(
+    ellipses: &mut [RowEllipse],
+    y0: f32,
+    pts: &[Vec3],
+    sleeves: &[Vec<Vec3>; 2],
+    gap: f32,
+) {
+    let n = ellipses.len();
+    let mut scale = vec![1.0_f32; n];
+    // Inner sleeve cloth counts where it lies over the torso's width (a dropped shoulder or a
+    // sleeve cap over the shoulder point); further out it is the arm, which the outer sleeve
+    // wraps instead.
+    let caps = sleeves.iter().flatten().filter(|q| {
+        let kf = ((q.y - y0) / ROW_BIN).round();
+        if kf < 0.0 || kf as usize >= n {
+            return false;
+        }
+        let e = &ellipses[kf as usize];
+        (q.x - e.cx).abs() <= 1.15 * e.rx
+    });
+    for q in pts.iter().chain(caps) {
+        let kf = (q.y - y0) / ROW_BIN;
+        let lo = (kf - ROW_WINDOW / ROW_BIN).floor().max(0.0) as usize;
+        let hi_f = (kf + ROW_WINDOW / ROW_BIN).ceil();
+        if hi_f < 0.0 || lo >= n {
+            continue;
+        }
+        let hi = (hi_f as usize).min(n - 1);
+        for k in lo..=hi {
+            let e = &ellipses[k];
+            let dx = q.x - e.cx;
+            let dz = q.z - e.cz;
+            let rz = if dz >= 0.0 { e.rz_front } else { e.rz_back };
+            let s = ((dx / e.rx).powi(2) + (dz / rz).powi(2)).sqrt();
+            let dist = (dx * dx + dz * dz).sqrt().max(1e-4);
+            let need = s * (dist + gap) / dist;
+            if need > scale[k] {
+                scale[k] = need;
+            }
+        }
+    }
+    // Spread each row's growth to its neighbours (+-15 mm) so the wrap never steps.
+    let half = (0.015 / ROW_BIN).round() as usize;
+    let grown: Vec<f32> = (0..n)
+        .map(|k| {
+            let a = k.saturating_sub(half);
+            let b = (k + half).min(n - 1);
+            scale[a..=b].iter().cloned().fold(1.0_f32, f32::max)
+        })
+        .collect();
+    for (e, k) in ellipses.iter_mut().zip(grown) {
+        e.rx *= k;
+        e.rz_front *= k;
+        e.rz_back *= k;
     }
 }
 
@@ -400,8 +519,14 @@ fn uv_bounds(rest_uv: &[(f32, f32)]) -> (f32, f32, f32, f32) {
     )
 }
 
-fn place_sleeve(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone) -> Vec<Vec3> {
+fn place_sleeve(
+    avatar: &ParametricAvatar,
+    pm: &PanelMesh,
+    zone: ArrangementZone,
+    inner: &InnerShell,
+) -> Vec<Vec3> {
     let s = if zone == ArrangementZone::SleeveRight { -1.0 } else { 1.0 };
+    let inner_sleeve = &inner.sleeves[if s > 0.0 { 0 } else { 1 }];
     let (x_min, x_max, y_min, y_max) = uv_bounds(&pm.rest_uv);
     let span_x = (x_max - x_min).max(0.05);
     let v_widest = widest_band_v(&pm.rest_uv, 0.5 * (y_min + y_max));
@@ -432,7 +557,14 @@ fn place_sleeve(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone
                 ((u - x_min) / span_x, span_x)
             };
             // Isometric tube: the row wraps 92% of a circle whose arc equals the row width.
-            let r = (avatar.arm_radius_at(arm_t) + 0.012).max(row_w / (TAU * 0.92));
+            let mut r = (avatar.arm_radius_at(arm_t) + 0.012).max(row_w / (TAU * 0.92));
+            if !inner_sleeve.is_empty() {
+                // Outer sleeve: a wider tube around the inner sleeve (it wraps less of a turn).
+                let ri = InnerShell::radius_around(inner_sleeve, center, axis, 0.015, 0.25);
+                if ri > 0.0 {
+                    r = r.max(ri + inner.gap);
+                }
+            }
             let ang = (xn - 0.5) * (row_w / r);
             let radial = out_top.scale(ang.cos()).add(fwd.scale(fwd_sign * ang.sin()));
             center.add(radial.scale(r))
@@ -444,7 +576,13 @@ fn place_sleeve(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone
 // Trouser legs
 // ---------------------------------------------------------------------------------------------
 
-fn place_leg(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone, side: f32) -> Vec<Vec3> {
+fn place_leg(
+    avatar: &ParametricAvatar,
+    pm: &PanelMesh,
+    zone: ArrangementZone,
+    side: f32,
+    inner: &InnerShell,
+) -> Vec<Vec3> {
     let (x_min, x_max, y_min, y_max) = uv_bounds(&pm.rest_uv);
     let span_y = (y_max - y_min).max(0.05);
     let is_front = zone == ArrangementZone::FrontLeg;
@@ -472,7 +610,14 @@ fn place_leg(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone, s
                 ((y - blend_low) / (avatar.waist_y - blend_low).max(0.1)).clamp(0.0, 1.0);
             let leg_t = ((crotch_top - y) / (crotch_top - avatar.ankle_y).max(0.1)).clamp(0.0, 1.0);
             let cx_leg = l0.x + (l1.x - l0.x) * leg_t;
-            let r_leg = (avatar.leg_radius_at(leg_t) + 0.018).max(0.052);
+            let mut r_leg = (avatar.leg_radius_at(leg_t) + 0.018).max(0.052);
+            if !inner.legs.is_empty() {
+                let c = Vec3::new(cx_leg, y, 0.0);
+                let ri = InnerShell::radius_around(&inner.legs, c, Vec3::new(0.0, 1.0, 0.0), 0.015, 0.25);
+                if ri > 0.0 {
+                    r_leg = r_leg.max(ri + inner.gap);
+                }
+            }
             let phi_leg = (u_oi - 0.5) * 2.75;
             let mut leg_x = cx_leg - side * r_leg * phi_leg.sin();
             if leg_x * side < 0.010 {

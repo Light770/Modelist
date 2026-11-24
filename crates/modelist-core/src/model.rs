@@ -1617,6 +1617,84 @@ impl ParametricOp {
     }
 }
 
+/// Moves a group of pieces (and the seams between them) into a fresh ID namespace.
+///
+/// Every entity ID owned by `pieces` (piece, edges, cutout edges, darts, notches, drill holes,
+/// internal lines) and every binding / interface ID in `bindings` becomes
+/// `det_id("{ns}:{old}")`, so the result is deterministic for a given `ns`. Edge references and
+/// dart/notch edge links are rewritten when they point inside the group; references to pieces
+/// outside the group are left untouched. Used when inserting content whose deterministic IDs
+/// may already exist in the project (re-importing a file, inserting a template twice).
+/// Returns the old -> new map.
+pub fn remap_entity_ids(
+    pieces: &mut [PatternPiece],
+    bindings: &mut [SeamBinding],
+    ns: &str,
+) -> HashMap<Uuid, Uuid> {
+    let mut map: HashMap<Uuid, Uuid> = HashMap::new();
+    let fresh = |map: &mut HashMap<Uuid, Uuid>, old: Uuid| -> Uuid {
+        *map.entry(old)
+            .or_insert_with(|| det_id(&format!("{ns}:{old}")))
+    };
+    for p in pieces.iter_mut() {
+        p.id = fresh(&mut map, p.id);
+        for e in p.seam_loop.edges.iter_mut() {
+            e.id = fresh(&mut map, e.id);
+        }
+        for c in p.cutouts.iter_mut() {
+            for e in c.edges.iter_mut() {
+                e.id = fresh(&mut map, e.id);
+            }
+        }
+        for d in p.darts.iter_mut() {
+            d.id = fresh(&mut map, d.id);
+        }
+        for n in p.notches.iter_mut() {
+            n.id = fresh(&mut map, n.id);
+        }
+        for h in p.drill_holes.iter_mut() {
+            h.id = fresh(&mut map, h.id);
+        }
+        for l in p.internal_lines.iter_mut() {
+            l.id = fresh(&mut map, l.id);
+        }
+    }
+    // Second pass: links inside the group (edge ids are all mapped by now).
+    let relink = |id: &mut Uuid| {
+        if let Some(n) = map.get(id) {
+            *id = *n;
+        }
+    };
+    for p in pieces.iter_mut() {
+        for d in p.darts.iter_mut() {
+            if let Some(e) = d.edge_id.as_mut() {
+                relink(e);
+            }
+        }
+        for n in p.notches.iter_mut() {
+            if let Some(e) = n.edge_id.as_mut() {
+                relink(e);
+            }
+        }
+    }
+    let mut out = map.clone();
+    for b in bindings.iter_mut() {
+        let nb = det_id(&format!("{ns}:{}", b.id));
+        out.insert(b.id, nb);
+        b.id = nb;
+        for iface in [&mut b.interface_a, &mut b.interface_b] {
+            let ni = det_id(&format!("{ns}:{}", iface.id));
+            out.insert(iface.id, ni);
+            iface.id = ni;
+            for er in iface.edges.iter_mut() {
+                relink(&mut er.piece_id);
+                relink(&mut er.edge_id);
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SizeTable {
     pub sizes: Vec<String>,
@@ -1778,6 +1856,26 @@ impl PatternProject {
 
     pub fn is_op_suppressed(&self, id: Uuid) -> bool {
         self.suppressed_ops.contains(&id)
+    }
+
+    /// Every entity ID the project already owns in its stored data: ops, custom pieces (and
+    /// their edges) and bindings added by ops. Template-drafted IDs are not stored here; callers
+    /// that need them add the evaluated pieces themselves.
+    pub fn stored_ids(&self) -> std::collections::HashSet<Uuid> {
+        let mut ids = std::collections::HashSet::new();
+        for op in &self.ops {
+            ids.insert(op.id());
+            if let ParametricOp::AddSeamBinding { binding, .. }
+            | ParametricOp::ReplaceSeamBinding { binding, .. } = op
+            {
+                ids.insert(binding.id);
+            }
+        }
+        for p in &self.custom_pieces {
+            ids.insert(p.id);
+            ids.extend(p.seam_loop.edges.iter().map(|e| e.id));
+        }
+        ids
     }
 
     pub fn active_ops(&self) -> Vec<ParametricOp> {

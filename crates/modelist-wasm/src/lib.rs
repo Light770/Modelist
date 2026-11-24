@@ -8,7 +8,7 @@ use modelist_core::model::{
     det_id, BodyMeasurements, CornerRule, EaseSpec, EaseTable, EdgeRef, EvaluatedPiece, FabricSpec,
     GradeMode, GrainRotationMode, HingeMode, NotchStyle, ParametricOp, ParametricVar,
     PatternProject, SeamBinding, SeamDriver, SeamInterface, SeamType, SizeTable, StackAnchor,
-    StitchingGraph,
+    StitchingGraph, PatternPiece, remap_entity_ids,
 };
 use modelist_core::nesting::{compute_marker_plan, export_marker_svg, MarkerConfig};
 use modelist_core::offset::evaluate_piece;
@@ -31,7 +31,7 @@ use modelist_sim3d::avatar::{AvatarBodyForm, AvatarPose};
 use modelist_sim3d::material::MaterialSet;
 use modelist_sim3d::xpbd::ClothSimSession;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
@@ -1689,9 +1689,10 @@ impl ModelistSession {
     }
 
     pub fn import_dxf_aama(&mut self, dxf_text: &str) -> Result<String, JsValue> {
-        let imported = import_dxf_aama(dxf_text).map_err(|e| JsValue::from_str(&e))?;
+        let mut imported = import_dxf_aama(dxf_text).map_err(|e| JsValue::from_str(&e))?;
         let count = imported.len();
         self.push_undo();
+        self.dedupe_imported_ids(&mut imported, &mut []);
         let max_x = self
             .evaluated
             .iter()
@@ -1727,11 +1728,12 @@ impl ModelistSession {
     }
 
     pub fn import_garmentcode_json(&mut self, json_text: &str) -> Result<String, JsValue> {
-        let (pieces, bindings) =
+        let (mut pieces, mut bindings) =
             import_garmentcode_json(json_text).map_err(|e| JsValue::from_str(&e))?;
         let p_count = pieces.len();
         let b_count = bindings.len();
         self.push_undo();
+        self.dedupe_imported_ids(&mut pieces, &mut bindings);
         let max_x = self
             .evaluated
             .iter()
@@ -1897,9 +1899,46 @@ impl ModelistSession {
         self.redo_stack.clear();
     }
 
+    /// IDs already used by the project, including template-drafted pieces, edges and seams.
+    fn used_ids(&self) -> HashSet<Uuid> {
+        let mut ids = self.project.stored_ids();
+        for ep in &self.evaluated {
+            ids.insert(ep.piece.id);
+            ids.extend(ep.piece.seam_loop.edges.iter().map(|e| e.id));
+        }
+        for b in &self.stitching.bindings {
+            ids.insert(b.id);
+        }
+        ids
+    }
+
+    /// A deterministic ID that nothing in the project uses yet. The counter restarts with every
+    /// session, so after opening a file it skips the IDs that file already holds.
     fn next_op_id(&mut self, tag: &str) -> Uuid {
-        self.op_counter += 1;
-        det_id(&format!("op:{tag}:{}", self.op_counter))
+        let used = self.used_ids();
+        loop {
+            self.op_counter += 1;
+            let id = det_id(&format!("op:{tag}:{}", self.op_counter));
+            if !used.contains(&id) {
+                return id;
+            }
+        }
+    }
+
+    /// Imported pieces carry IDs derived from the file content, so importing the same file twice
+    /// would duplicate them. On any collision, move the whole import into a fresh namespace.
+    fn dedupe_imported_ids(&mut self, pieces: &mut [PatternPiece], bindings: &mut [SeamBinding]) {
+        let used = self.used_ids();
+        let mut seen = HashSet::new();
+        let clash = pieces.iter().any(|p| {
+            used.contains(&p.id)
+                || !seen.insert(p.id)
+                || p.seam_loop.edges.iter().any(|e| used.contains(&e.id))
+        }) || bindings.iter().any(|b| used.contains(&b.id));
+        if clash {
+            let ns = self.next_op_id("import");
+            remap_entity_ids(pieces, bindings, &ns.to_string());
+        }
     }
 
     fn insert_op(&mut self, op: ParametricOp) {
@@ -2002,4 +2041,69 @@ fn now_ms() -> f64 {
 #[cfg(not(target_arch = "wasm32"))]
 fn now_ms() -> f64 {
     0.0
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+
+    fn all_op_ids(s: &ModelistSession) -> Vec<Uuid> {
+        s.project.ops.iter().map(|o| o.id()).collect()
+    }
+
+    fn assert_unique(ids: &[Uuid]) {
+        let set: HashSet<_> = ids.iter().collect();
+        assert_eq!(set.len(), ids.len(), "duplicate IDs: {ids:?}");
+    }
+
+    #[test]
+    fn op_ids_stay_unique_after_reopening_a_file() {
+        let mut a = ModelistSession::new("boxy_tee");
+        let pid = a.evaluated[0].piece.id.to_string();
+        for i in 0..4 {
+            a.add_notch(&pid, 0, 0.2 + 0.1 * i as f64, "v", 1, 6.0);
+        }
+        let json = a.serialize_project_json();
+
+        // A fresh session restarts its counter at 1, as the browser does after opening a file.
+        let mut b = ModelistSession::new("boxy_tee");
+        b.load_project_json(&json).unwrap();
+        let pid_b = b.evaluated[0].piece.id.to_string();
+        for i in 0..4 {
+            b.add_notch(&pid_b, 1, 0.2 + 0.1 * i as f64, "v", 1, 6.0);
+        }
+        assert_eq!(b.project.ops.len(), 8);
+        assert_unique(&all_op_ids(&b));
+    }
+
+    #[test]
+    fn duplicated_pieces_never_reuse_a_piece_id() {
+        let mut a = ModelistSession::new("boxy_tee");
+        let pid = a.evaluated[0].piece.id.to_string();
+        a.duplicate_piece(&pid);
+        let json = a.serialize_project_json();
+        let mut b = ModelistSession::new("boxy_tee");
+        b.load_project_json(&json).unwrap();
+        b.duplicate_piece(&pid);
+        let ids: Vec<Uuid> = b.evaluated.iter().map(|e| e.piece.id).collect();
+        assert_unique(&ids);
+    }
+
+    #[test]
+    fn importing_the_same_dxf_twice_keeps_ids_unique() {
+        let mut s = ModelistSession::new("boxy_tee");
+        let dxf = s.export_dxf_aama();
+        let before = s.evaluated.len();
+        s.import_dxf_aama(&dxf).unwrap();
+        s.import_dxf_aama(&dxf).unwrap();
+        assert!(s.evaluated.len() > before);
+        let ids: Vec<Uuid> = s.evaluated.iter().map(|e| e.piece.id).collect();
+        assert_unique(&ids);
+        let edges: Vec<Uuid> = s
+            .evaluated
+            .iter()
+            .flat_map(|e| e.piece.seam_loop.edges.iter().map(|x| x.id))
+            .collect();
+        assert_unique(&edges);
+    }
 }

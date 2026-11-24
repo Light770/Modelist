@@ -788,4 +788,52 @@ mod fabric_tests {
         p.set_role_fabric("rib", None);
         assert_eq!(p.fabric_for_role("Rib").id, "cotton_poplin");
     }
+
+    #[test]
+    fn remap_entity_ids_is_deterministic_and_keeps_links() {
+        use crate::blocks::{build_default_variables, build_template_pieces};
+        use crate::model::{det_id, BodyMeasurements, EaseTable};
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let vars = build_default_variables("boxy_tee");
+        let (mut pieces, stitching, _, _) =
+            build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        let mut bindings = stitching.bindings.clone();
+        let orig_pieces = pieces.clone();
+        let orig_bindings = bindings.clone();
+        let map = crate::model::remap_entity_ids(&mut pieces, &mut bindings, "component:a");
+
+        // Every owned ID changed, deterministically.
+        for (o, n) in orig_pieces.iter().zip(&pieces) {
+            assert_ne!(o.id, n.id);
+            assert_eq!(map[&o.id], n.id);
+            assert_eq!(n.id, det_id(&format!("component:a:{}", o.id)));
+            for (oe, ne) in o.seam_loop.edges.iter().zip(&n.seam_loop.edges) {
+                assert_eq!(map[&oe.id], ne.id);
+            }
+        }
+        // Seams still point at real pieces and edges of the remapped group.
+        for b in &bindings {
+            for er in b.interface_a.edges.iter().chain(&b.interface_b.edges) {
+                let p = pieces.iter().find(|p| p.id == er.piece_id).expect("piece link");
+                assert!(p.seam_loop.edge_index_by_id(er.edge_id).is_some(), "edge link");
+            }
+        }
+        assert_eq!(bindings.len(), orig_bindings.len());
+        // Notch and dart edge links follow their edges.
+        for p in &pieces {
+            for n in &p.notches {
+                if let Some(eid) = n.edge_id {
+                    assert!(p.seam_loop.edge_index_by_id(eid).is_some());
+                }
+            }
+        }
+        // Same namespace -> same IDs; another namespace -> disjoint IDs.
+        let (mut again, _, _, _) = build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        crate::model::remap_entity_ids(&mut again, &mut [], "component:a");
+        assert_eq!(again[0].id, pieces[0].id);
+        let (mut other, _, _, _) = build_template_pieces("boxy_tee", &m, &e, &vars, &[], &[]);
+        crate::model::remap_entity_ids(&mut other, &mut [], "component:b");
+        assert!(other.iter().all(|o| pieces.iter().all(|p| p.id != o.id)));
+    }
 }
