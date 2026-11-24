@@ -7,7 +7,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "test:unit": "esbuild src/lib/cad/__tests__/cad-modules.test.ts --bundle --platform=node --format=esm --outfile=.test-dist/cad-modules.test.mjs && node --test .test-dist/cad-modules.test.mjs && rm -rf .test-dist"
   },
   "dependencies": {
     "@astrojs/react": "^4.4.2",

@@ -14,8 +14,9 @@ Implements Modelist's isolated Phase 3 virtual fitting room without adding runti
 
 ## Core Isolation Rule
 
-- Lazy-load the 3D module, WebGPU pipelines, and avatar assets only when the user opens the 3D viewport.
+- Keep all 3D meshing and physics in a dedicated isolated crate (`crates/modelist-sim3d`) and lazy-load the frontend 3D viewport (`React.lazy`) only when the user opens the 3D Fit Room; explicitly release 3D state (`dispose_sim3d`) when closed.
 - Never let 3D simulation meshes mutate 2D `seam_loop` geometry directly; surface fit issues via diagnostic maps and explicit 2D edit suggestions.
+- Never bundle non-browser or non-permissive engines (ArcSim is non-commercial UC Regents; NVIDIA Warp/Newton and Taichi are Python/desktop runtimes — use Newton only as an optional offline CI oracle, and implement our in-browser solver in Rust/WASM + WebGPU/WGSL with XPBD -> VBD progression).
 
 ## Implementation Steps
 

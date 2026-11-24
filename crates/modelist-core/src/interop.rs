@@ -1,9 +1,10 @@
 use crate::blocks::build_template_pieces;
 use crate::curve::{edge_total_length, fit_cubic_schneider};
 use crate::model::{
-    det_id, polygon_signed_area, ClosedPolyCurve, CornerRule, CurveSegment, DrillHole,
-    EvaluatedPiece, GrainRotationMode, GrainlineSpec, NotchAnchor, NotchStyle, PatternPiece,
-    PatternProject, Point2, PolyEdge, FLATTEN_TOL_MM,
+    det_id, polygon_signed_area, ArrangementZone, ClosedPolyCurve, CornerRule, CurveSegment,
+    DrillHole, EaseSpec, EdgeRef, EvaluatedPiece, GrainRotationMode, GrainlineSpec, NotchAnchor,
+    NotchStyle, PatternPiece, PatternProject, Point2, PolyEdge, SeamBinding, SeamDriver,
+    SeamInterface, SeamType, FLATTEN_TOL_MM,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -113,7 +114,8 @@ pub fn export_dxf_aama(pieces: &[EvaluatedPiece], size_name: &str) -> String {
             }
         }
         for d in &p.darts {
-            if let Some(edge) = p.seam_loop.edges.get(d.edge_idx) {
+            if let Some(ei) = d.resolve_edge_idx(&p.seam_loop) {
+                let edge = &p.seam_loop.edges[ei];
                 let a = crate::curve::eval_edge_point(edge, d.leg_a_t);
                 let b = crate::curve::eval_edge_point(edge, d.leg_b_t);
                 write_dxf_polyline(&mut out, "8", &[a, d.apex, b], false);
@@ -444,6 +446,7 @@ pub fn import_dxf_aama(dxf_text: &str) -> Result<Vec<PatternPiece>, String> {
                     notches.push(NotchAnchor {
                         id: det_id(&format!("dxf_import:{idx}:notch:{ni}")),
                         edge_idx: e_idx,
+                        edge_id: seam_loop.edges.get(e_idx).map(|e| e.id),
                         param_t: t,
                         style: NotchStyle::Slit,
                         count: 1,
@@ -496,6 +499,7 @@ pub fn import_dxf_aama(dxf_text: &str) -> Result<Vec<PatternPiece>, String> {
             grade_deltas: vec![],
             visible: true,
             fabric_role: "Imported".into(),
+            arrangement_zone: ArrangementZone::FlatCustom,
         });
     }
 
@@ -818,6 +822,7 @@ pub struct PomRow {
 
 pub fn compute_pom_table(project: &PatternProject) -> Vec<PomRow> {
     let mut rows_map: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+    let active_ops = project.active_ops();
     for size in &project.size_table.sizes {
         let m = project
             .size_table
@@ -827,7 +832,7 @@ pub fn compute_pom_table(project: &PatternProject) -> Vec<PomRow> {
             &m,
             &project.ease,
             &project.variables,
-            &project.ops,
+            &active_ops,
             &project.custom_pieces,
         );
         for p in &pieces {
@@ -981,7 +986,8 @@ pub fn compute_pdf_layout_plan(
                     }
                 }
                 for d in &ep.piece.darts {
-                    if let Some(edge) = ep.piece.seam_loop.edges.get(d.edge_idx) {
+                    if let Some(ei) = d.resolve_edge_idx(&ep.piece.seam_loop) {
+                        let edge = &ep.piece.seam_loop.edges[ei];
                         let da = crate::curve::eval_edge_point(edge, d.leg_a_t);
                         let db = crate::curve::eval_edge_point(edge, d.leg_b_t);
                         paths.push(PdfLayerPath {
@@ -1175,4 +1181,327 @@ fn bbox_of(pts: &[Point2]) -> (f64, f64, f64, f64) {
 
 pub fn serialize_evaluated_polygon_points(piece: &PatternPiece) -> Vec<Point2> {
     piece.seam_loop.flatten(FLATTEN_TOL_MM)
+}
+
+/// ANSI / AAMA `.rul` Grade Rule Table sidecar exporter (Stage 10 production handoff).
+/// Computes exact per-vertex (dx, dy) deltas in millimeters across every size relative to base size.
+pub fn export_aama_rul(project: &PatternProject) -> String {
+    let base_size = &project.size_table.active_size;
+    let sizes = &project.size_table.sizes;
+
+    let mut per_size_pieces: HashMap<String, Vec<PatternPiece>> = HashMap::new();
+    let active_ops = project.active_ops();
+    for size in sizes {
+        let m = project
+            .size_table
+            .measurements_for(size, &project.measurements);
+        let (pieces, _, _, _) = build_template_pieces(
+            &project.template_id,
+            &m,
+            &project.ease,
+            &project.variables,
+            &active_ops,
+            &project.custom_pieces,
+        );
+        per_size_pieces.insert(size.clone(), pieces);
+    }
+
+    let Some(base_pieces) = per_size_pieces.get(base_size) else {
+        return String::new();
+    };
+
+    let mut rule_entries: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
+    for (pi, bp) in base_pieces.iter().enumerate() {
+        let base_anchor = bp.grainline.start.lerp(bp.grainline.end, 0.5);
+        for (ei, edge) in bp.seam_loop.edges.iter().enumerate() {
+            let base_rel = edge.start.sub(base_anchor);
+            let mut deltas = Vec::with_capacity(sizes.len());
+            for s in sizes {
+                let delta = per_size_pieces
+                    .get(s)
+                    .and_then(|list| list.get(pi))
+                    .and_then(|gp| {
+                        let g_anchor = gp.grainline.start.lerp(gp.grainline.end, 0.5);
+                        gp.seam_loop
+                            .edge_by_id(edge.id)
+                            .or_else(|| gp.seam_loop.edges.get(ei))
+                            .map(|ge| ge.start.sub(g_anchor).sub(base_rel))
+                    })
+                    .unwrap_or(Point2::ZERO);
+                deltas.push((delta.x, delta.y));
+            }
+            rule_entries.push((format!("{} V{} ({})", bp.code, ei + 1, edge.label), deltas));
+        }
+    }
+
+    let mut out = String::with_capacity(8192);
+    out.push_str("AUTHOR: Modelist CAD\n");
+    out.push_str(&format!("STYLE: {}\n", project.name));
+    out.push_str("PRODUCT: AAMA/ASTM D6673 Grade Rule Table\n");
+    out.push_str("VERSION: 1.0\n");
+    out.push_str("UNITS: METRIC\n");
+    out.push_str(&format!("NUMBER OF SIZES: {}\n", sizes.len()));
+    out.push_str(&format!("SIZE LIST: {}\n", sizes.join(" ")));
+    out.push_str(&format!("SAMPLE SIZE: {base_size}\n"));
+    out.push_str(&format!("NUMBER OF RULES: {}\n", rule_entries.len()));
+
+    for (idx, (comment, deltas)) in rule_entries.iter().enumerate() {
+        out.push_str(&format!("RULE: {} /* {comment} */\n", idx + 1));
+        for (dx, dy) in deltas {
+            out.push_str(&format!("DELTA: {dx:.3} {dy:.3}\n"));
+        }
+    }
+    out.push_str("END\n");
+    out
+}
+
+/// GarmentCode / GarmentCodeData specification JSON importer (ETH Zurich / Design2GarmentCode interop).
+/// Converts panels (cm -> mm), relative quadratic/cubic curvatures, and stitches directly into
+/// Modelist PatternPieces + UUID-anchored SeamBindings.
+pub fn import_garmentcode_json(
+    json_text: &str,
+) -> Result<(Vec<PatternPiece>, Vec<SeamBinding>), String> {
+    let root: serde_json::Value =
+        serde_json::from_str(json_text).map_err(|e| format!("Invalid JSON: {e}"))?;
+    let pattern = root
+        .get("pattern")
+        .unwrap_or(&root);
+    let panels_obj = pattern
+        .get("panels")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "Missing `pattern.panels` object in GarmentCode JSON".to_string())?;
+
+    let mut pieces = Vec::new();
+    let mut panel_edge_map: HashMap<(String, usize), (uuid::Uuid, uuid::Uuid)> = HashMap::new();
+    let mut cursor_x = 0.0_f64;
+
+    let mut panel_names: Vec<String> = panels_obj.keys().cloned().collect();
+    panel_names.sort();
+
+    for (p_idx, pname) in panel_names.iter().enumerate() {
+        let pval = &panels_obj[pname];
+        let verts_val = pval
+            .get("vertices")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| format!("Panel `{pname}` missing `vertices`"))?;
+        let edges_val = pval
+            .get("edges")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| format!("Panel `{pname}` missing `edges`"))?;
+
+        // GarmentCode uses centimeters -> convert to exact f64 millimeters (x 10.0)
+        let raw_verts: Vec<Point2> = verts_val
+            .iter()
+            .filter_map(|pt| {
+                let arr = pt.as_array()?;
+                Some(Point2::new(
+                    arr.first()?.as_f64()? * 10.0,
+                    arr.get(1)?.as_f64()? * 10.0,
+                ))
+            })
+            .collect();
+        if raw_verts.len() < 3 {
+            continue;
+        }
+        let (min_x, min_y, max_x, max_y) = bbox_of(&raw_verts);
+        let shift = Point2::new(cursor_x - min_x, -min_y);
+        let verts: Vec<Point2> = raw_verts.iter().map(|v| v.add(shift)).collect();
+
+        let pid = det_id(&format!("garmentcode:panel:{pname}"));
+        let mut poly_edges = Vec::new();
+
+        for (ei, eval) in edges_val.iter().enumerate() {
+            let eps = match eval.get("endpoints").and_then(|v| v.as_array()) {
+                Some(a) if a.len() >= 2 => (
+                    a[0].as_u64().unwrap_or(0) as usize,
+                    a[1].as_u64().unwrap_or(0) as usize,
+                ),
+                _ => continue,
+            };
+            if eps.0 >= verts.len() || eps.1 >= verts.len() {
+                continue;
+            }
+            let p0 = verts[eps.0];
+            let p1 = verts[eps.1];
+            let eid = det_id(&format!("garmentcode:edge:{pname}:{ei}"));
+            panel_edge_map.insert((pname.clone(), ei), (pid, eid));
+
+            let segment = parse_gc_curvature(p0, p1, eval.get("curvature"));
+            poly_edges.push(PolyEdge {
+                id: eid,
+                start: p0,
+                segment,
+                sa_width_mm: 10.0,
+                corner_rule: CornerRule::Miter { limit: 2.5 },
+                label: format!("Edge {}", ei + 1),
+            });
+        }
+
+        if poly_edges.len() < 3 {
+            continue;
+        }
+        let mut loop_c = ClosedPolyCurve::from_edges(poly_edges);
+        loop_c.sync_continuity();
+        loop_c.ensure_ccw();
+
+        let cx = cursor_x + (max_x - min_x) * 0.5;
+        let h = (max_y - min_y).max(60.0);
+        let lower = pname.to_lowercase();
+        let zone = if lower.contains("sleeve") {
+            if lower.contains("r") {
+                ArrangementZone::SleeveRight
+            } else {
+                ArrangementZone::SleeveLeft
+            }
+        } else if lower.contains("skirt") {
+            if lower.contains("back") {
+                ArrangementZone::BackSkirt
+            } else {
+                ArrangementZone::FrontSkirt
+            }
+        } else if lower.contains("back") {
+            ArrangementZone::BackTorso
+        } else {
+            ArrangementZone::FrontTorso
+        };
+
+        pieces.push(PatternPiece {
+            id: pid,
+            name: pname.replace('_', " "),
+            code: format!("GC-{:02}", p_idx + 1),
+            cut_quantity: 1,
+            mirror_fold_edge: None,
+            grainline: GrainlineSpec {
+                start: Point2::new(cx, h * 0.18),
+                end: Point2::new(cx, h * 0.82),
+                rotation_mode: GrainRotationMode::TwoWay,
+            },
+            seam_loop: loop_c,
+            cutouts: vec![],
+            darts: vec![],
+            internal_lines: vec![],
+            drill_holes: vec![],
+            notches: vec![],
+            grade_deltas: vec![],
+            visible: true,
+            fabric_role: "GarmentCode".into(),
+            arrangement_zone: zone,
+        });
+
+        cursor_x += (max_x - min_x) + 110.0;
+    }
+
+    let mut bindings = Vec::new();
+    if let Some(stitches) = pattern.get("stitches").and_then(|v| v.as_array()) {
+        for (si, st) in stitches.iter().enumerate() {
+            let Some(pair) = st.as_array() else {
+                continue;
+            };
+            if pair.len() < 2 {
+                continue;
+            }
+            let parse_side = |v: &serde_json::Value| -> Option<(String, usize)> {
+                let panel = v.get("panel")?.as_str()?.to_string();
+                let edge = v.get("edge")?.as_u64()? as usize;
+                Some((panel, edge))
+            };
+            let (Some((pa, ea)), Some((pb, eb))) = (parse_side(&pair[0]), parse_side(&pair[1]))
+            else {
+                continue;
+            };
+            let (Some(&(pid_a, eid_a)), Some(&(pid_b, eid_b))) = (
+                panel_edge_map.get(&(pa.clone(), ea)),
+                panel_edge_map.get(&(pb.clone(), eb)),
+            ) else {
+                continue;
+            };
+            let bid = det_id(&format!("garmentcode:stitch:{si}:{pa}:{ea}:{pb}:{eb}"));
+            bindings.push(SeamBinding {
+                id: bid,
+                label: format!("GC Stitch {}: {} #{} <-> {} #{}", si + 1, pa, ea + 1, pb, eb + 1),
+                interface_a: SeamInterface {
+                    id: det_id(&format!("{bid}:ia")),
+                    name: format!("{pa} E{}", ea + 1),
+                    edges: vec![EdgeRef {
+                        piece_id: pid_a,
+                        edge_id: eid_a,
+                        dir: 1,
+                    }],
+                },
+                interface_b: SeamInterface {
+                    id: det_id(&format!("{bid}:ib")),
+                    name: format!("{pb} E{}", eb + 1),
+                    edges: vec![EdgeRef {
+                        piece_id: pid_b,
+                        edge_id: eid_b,
+                        dir: -1,
+                    }],
+                },
+                ease: EaseSpec::Exact,
+                driver: SeamDriver::MonitorOnly,
+                seam_type: SeamType::Plain,
+                ease_min_mm: -3.0,
+                ease_max_mm: 3.0,
+                auto_partner_notches: true,
+            });
+        }
+    }
+
+    if pieces.is_empty() {
+        return Err("No valid panels parsed from GarmentCode JSON".into());
+    }
+    Ok((pieces, bindings))
+}
+
+fn parse_gc_curvature(p0: Point2, p1: Point2, curv: Option<&serde_json::Value>) -> CurveSegment {
+    let Some(c) = curv else {
+        return CurveSegment::Line { end: p1 };
+    };
+    let edge_vec = p1.sub(p0);
+    let perp = Point2::new(-edge_vec.y, edge_vec.x);
+
+    // Format A: [rel_t, rel_h] quadratic relative point
+    if let Some(arr) = c.as_array() {
+        if arr.len() >= 2 {
+            if let (Some(rt), Some(rh)) = (arr[0].as_f64(), arr[1].as_f64()) {
+                let q = p0.add(edge_vec.scale(rt)).add(perp.scale(rh));
+                return quad_to_cubic(p0, q, p1);
+            }
+        }
+    }
+
+    // Format B: { "type": "quadratic"|"cubic", "params": [[t, h], ...] }
+    if let Some(obj) = c.as_object() {
+        let params = obj.get("params").and_then(|v| v.as_array());
+        if let Some(ps) = params {
+            if ps.len() == 1 {
+                if let Some(a) = ps[0].as_array() {
+                    if let (Some(rt), Some(rh)) = (a.first().and_then(|v| v.as_f64()), a.get(1).and_then(|v| v.as_f64())) {
+                        let q = p0.add(edge_vec.scale(rt)).add(perp.scale(rh));
+                        return quad_to_cubic(p0, q, p1);
+                    }
+                }
+            } else if ps.len() >= 2 {
+                let p_rel = |v: &serde_json::Value| -> Option<Point2> {
+                    let a = v.as_array()?;
+                    let rt = a.first()?.as_f64()?;
+                    let rh = a.get(1)?.as_f64()?;
+                    Some(p0.add(edge_vec.scale(rt)).add(perp.scale(rh)))
+                };
+                if let (Some(c1), Some(c2)) = (p_rel(&ps[0]), p_rel(&ps[1])) {
+                    return CurveSegment::Cubic { c1, c2, end: p1 };
+                }
+            }
+        }
+    }
+
+    CurveSegment::Line { end: p1 }
+}
+
+fn quad_to_cubic(p0: Point2, q: Point2, p1: Point2) -> CurveSegment {
+    CurveSegment::Cubic {
+        c1: p0.add(q.sub(p0).scale(2.0 / 3.0)),
+        c2: p1.add(q.sub(p1).scale(2.0 / 3.0)),
+        end: p1,
+    }
 }

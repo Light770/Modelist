@@ -3,14 +3,14 @@ use crate::curve::{
 };
 use crate::model::{
     polygon_perimeter, polygon_signed_area, CornerRule, EvaluatedPiece, PatternPiece, Point2,
-    ProjectedNotch, StitchLink, FLATTEN_TOL_MM,
+    ProjectedNotch, SeamBinding, FLATTEN_TOL_MM,
 };
 use crate::ops::compute_dart_cap_polylines;
 use cavalier_contours::polyline::{PlineSource, PlineSourceMut, PlineVertex, Polyline};
 
 pub fn evaluate_piece(
     piece: &PatternPiece,
-    stitching: &[StitchLink],
+    bindings: &[SeamBinding],
     all_pieces: &[PatternPiece],
 ) -> EvaluatedPiece {
     let mut warnings = Vec::new();
@@ -24,7 +24,7 @@ pub fn evaluate_piece(
     let perimeter_mm = polygon_perimeter(&seam_polyline);
     let area_mm2 = polygon_signed_area(&seam_polyline).abs();
 
-    let cut_polyline = compute_variable_sa_cutline(piece, stitching, all_pieces);
+    let cut_polyline = compute_variable_sa_cutline(piece, bindings, all_pieces);
     let cut_area_mm2 = if cut_polyline.len() >= 3 {
         polygon_signed_area(&cut_polyline).abs()
     } else {
@@ -67,7 +67,7 @@ pub fn evaluate_piece(
 
 pub fn compute_variable_sa_cutline(
     piece: &PatternPiece,
-    stitching: &[StitchLink],
+    bindings: &[SeamBinding],
     all_pieces: &[PatternPiece],
 ) -> Vec<Point2> {
     let edges = &piece.seam_loop.edges;
@@ -130,7 +130,6 @@ pub fn compute_variable_sa_cutline(
                 }
             }
             CornerRule::FoldedHem => {
-                // Reflect tapered adjacent seam line across hem seamline so folded hem aligns flush
                 let corner_pt = solve_folded_hem_corner(
                     v_seam,
                     edges[i].corner_rule == CornerRule::FoldedHem,
@@ -149,7 +148,7 @@ pub fn compute_variable_sa_cutline(
                 }
             }
             CornerRule::MatchedSeam => {
-                let partner_w = lookup_partner_sa(piece.id, i, stitching, all_pieces)
+                let partner_w = lookup_partner_sa(piece.id, edges[i].id, bindings, all_pieces)
                     .unwrap_or(w_next);
                 let ta = a_end.sub(a_prev).normalized();
                 let tb = b_next.sub(b_start).normalized();
@@ -193,8 +192,6 @@ pub fn compute_variable_sa_cutline(
         cut_pts.pop();
     }
 
-    // Prune concave bowtie self-intersections, remove redundant collinear/coincident vertices via cavalier_contours,
-    // and normalize CCW winding.
     let pruned = prune_self_intersections(cut_pts);
     let mut cleaned = cleanup_via_cavalier(&pruned);
     if polygon_signed_area(&cleaned) < 0.0 {
@@ -287,7 +284,6 @@ fn solve_folded_hem_corner(
     let tb = b_next.sub(b_start).normalized();
 
     if curr_is_hem && !next_is_hem {
-        // Edge i is hem (fold line along seamline edge_i), Edge next is tapered side seam
         let fold_dir = eval_edge_point(edge_i, 1.0)
             .sub(eval_edge_point(edge_i, 0.75))
             .normalized();
@@ -300,7 +296,6 @@ fn solve_folded_hem_corner(
             }
         }
     } else if next_is_hem && !curr_is_hem {
-        // Edge i is tapered side seam, Edge next is hem fold line
         let fold_dir = eval_edge_point(edge_next, 0.25)
             .sub(eval_edge_point(edge_next, 0.0))
             .normalized();
@@ -332,18 +327,28 @@ fn reflect_pt(p: Point2, origin: Point2, axis_dir: Point2) -> Point2 {
 
 fn lookup_partner_sa(
     piece_id: uuid::Uuid,
-    edge_idx: usize,
-    stitching: &[StitchLink],
+    edge_id: uuid::Uuid,
+    bindings: &[SeamBinding],
     all_pieces: &[PatternPiece],
 ) -> Option<f64> {
-    for link in stitching {
-        if link.piece_a == piece_id && link.edge_a == edge_idx {
-            let pb = all_pieces.iter().find(|p| p.id == link.piece_b)?;
-            return pb.seam_loop.edges.get(link.edge_b).map(|e| e.sa_width_mm);
+    for b in bindings {
+        if b.interface_a
+            .edges
+            .iter()
+            .any(|e| e.piece_id == piece_id && e.edge_id == edge_id)
+        {
+            let first = b.interface_b.edges.first()?;
+            let pb = all_pieces.iter().find(|p| p.id == first.piece_id)?;
+            return pb.seam_loop.edge_by_id(first.edge_id).map(|e| e.sa_width_mm);
         }
-        if link.piece_b == piece_id && link.edge_b == edge_idx {
-            let pa = all_pieces.iter().find(|p| p.id == link.piece_a)?;
-            return pa.seam_loop.edges.get(link.edge_a).map(|e| e.sa_width_mm);
+        if b.interface_b
+            .edges
+            .iter()
+            .any(|e| e.piece_id == piece_id && e.edge_id == edge_id)
+        {
+            let first = b.interface_a.edges.first()?;
+            let pa = all_pieces.iter().find(|p| p.id == first.piece_id)?;
+            return pa.seam_loop.edge_by_id(first.edge_id).map(|e| e.sa_width_mm);
         }
     }
     None
@@ -403,8 +408,6 @@ pub fn has_self_intersection(pts: &[Point2]) -> bool {
     false
 }
 
-/// Prunes local inward self-intersection loops (bowties/swallowtails) by keeping the larger
-/// outer CCW cycle whenever two non-adjacent segments cross.
 fn prune_self_intersections(mut pts: Vec<Point2>) -> Vec<Point2> {
     for _ in 0..64 {
         let n = pts.len();
@@ -460,9 +463,10 @@ fn project_notches(
 ) -> Vec<ProjectedNotch> {
     let mut out = Vec::with_capacity(piece.notches.len());
     for n in &piece.notches {
-        let Some(edge) = piece.seam_loop.edges.get(n.edge_idx) else {
+        let Some(ei) = n.resolve_edge_idx(&piece.seam_loop) else {
             continue;
         };
+        let edge = &piece.seam_loop.edges[ei];
         let seam_pt = eval_edge_point(edge, n.param_t);
         let out_n = eval_edge_outward_normal(edge, n.param_t);
         let mut warn = None;
@@ -479,7 +483,7 @@ fn project_notches(
             ));
         }
 
-        let cut_pt = ray_intersect_polygon(seam_pt, out_n, cut_poly)
+        let cut_pt = ray_intersect_polygon_pub(seam_pt, out_n, cut_poly)
             .unwrap_or_else(|| seam_pt.add(out_n.scale(edge.sa_width_mm)));
 
         if let Some(ref w) = warn {
@@ -495,12 +499,13 @@ fn project_notches(
             count: n.count,
             depth_mm: n.depth_mm.min((edge.sa_width_mm - 1.0).max(2.0)),
             warning: warn,
+            is_auto_partner: false,
         });
     }
     out
 }
 
-fn ray_intersect_polygon(origin: Point2, dir: Point2, poly: &[Point2]) -> Option<Point2> {
+pub fn ray_intersect_polygon_pub(origin: Point2, dir: Point2, poly: &[Point2]) -> Option<Point2> {
     if poly.len() < 3 {
         return None;
     }

@@ -1,0 +1,17 @@
+Modelist 3D Mannequin Assets — License Attribution & Provenance
+
+The binary mesh template, skeletal skinning weights, and anthropometric morph
+targets stored in `mannequin_cc0.bin` are derived exclusively from the graphical
+assets of the MakeHuman project (`makehumancommunity/makehuman`):
+  - `makehuman/data/3dobjs/base.obj` (`body` mesh group, `hm08` topology)
+  - `makehuman/data/rigs/default_weights.mhw`
+  - `makehuman/data/targets/{macrodetails,proportions,measure}/*.target`
+
+Per MakeHuman's dual-licensing terms (`LICENSE.md` Section C / `LICENSE.ASSETS.md`):
+All bundled MakeHuman graphical assets (base mesh, targets, and rig weights)
+are released into the public domain under:
+
+  Creative Commons CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
+  https://creativecommons.org/publicdomain/zero/1.0/
+
+No AGPL MakeHuman source code is included or derived from in this repository.

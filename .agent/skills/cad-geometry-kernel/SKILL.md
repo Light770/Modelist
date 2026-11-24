@@ -24,10 +24,11 @@ Implements exact `f64` millimeter 2D apparel geometry in Rust compiled to WebAss
 - Compute forward arc length $L(t)$ via 5–7 point Gauss-Legendre quadrature (subdividing at curvature extrema/inflections).
 - Invert $t(s)$ using Newton-Raphson ($t_{n+1} = t_n - (L(t_n) - s)/\|C'(t_n)\|$) guarded by bisection bracketing until $|L(t) - s| < 0.01\text{ mm}$.
 
-### 2. Seam Walking & Corner Truing
-- Query `StitchingGraph` for paired `(edge_a, dir_a, edge_b, dir_b, ease_mm)`.
-- Align partner frame rigidly onto active seam point $(P_A, \hat{T}_A) \leftrightarrow (P_B, -\hat{T}_B)$ without mutating underlying coordinates during walking preview.
-- In corner truing mode, snap partner piece across the shared seam corner and constrain paired incoming Bézier handles to `G1` collinearity.
+### 2. Interdependent Seam Interfaces, Walking & Corner Truing
+- Always reference seams via deterministic edge UUIDs (`EdgeRef { piece_id, edge_id, dir }`) grouped into `SeamInterface`s and connected by `SeamBinding`s — never brittle `edge_idx: usize` links.
+- Run `solve_seam_bindings` after parametric rebuilds and manual edits so driver interfaces propagate ease/gather targets (`Exact`, `EaseMm`, `EasePct`, `Gather`) onto followers via safeguarded 1D secant/Newton arc-length iteration (`< 0.05 mm`).
+- Project driver notches and multi-edge junctions onto followers by arc-length fraction (GarmentCode fraction projection) to auto-generate partner notches and walk multi-edge seams continuously.
+- In corner truing mode, snap partner piece across the shared seam corner and constrain paired incoming Bézier handles to `G1` collinearity or `90°` square-offs.
 
 ### 3. Dart Manipulation & Slash-and-Spread
 - Model darts as first-class `DartEntity` records (`apex`, legs, `intake_angle_rad`, `fold_direction`, `cap_style`).

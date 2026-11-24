@@ -1,10 +1,10 @@
 use crate::blocks::build_template_pieces;
-use crate::curve::edge_total_length;
 use crate::model::{
-    CurveSegment, EvaluatedPiece, GradeMode, PatternPiece, PatternProject, Point2, StackAnchor,
-    StitchLink,
+    CurveSegment, EvaluatedPiece, GradeMode, PatternPiece, PatternProject, Point2, SeamBinding,
+    StackAnchor,
 };
 use crate::offset::evaluate_piece;
+use crate::seam::{interface_total_length, synthesize_partner_notches};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -154,7 +154,7 @@ fn translate_piece(piece: &mut PatternPiece, offset: Point2) {
 pub fn evaluate_graded_nest(
     project: &PatternProject,
     active_evaluated: &[EvaluatedPiece],
-    stitching: &[StitchLink],
+    bindings: &[SeamBinding],
 ) -> HashMap<String, Vec<EvaluatedPiece>> {
     let mut nest = HashMap::new();
     let active_anchors: HashMap<uuid::Uuid, Point2> = active_evaluated
@@ -162,6 +162,7 @@ pub fn evaluate_graded_nest(
         .map(|ep| (ep.piece.id, anchor_point(&ep.piece, project.stack_anchor)))
         .collect();
 
+    let active_ops = project.active_ops();
     for size in &project.size_table.visible_sizes {
         if size == &project.size_table.active_size {
             nest.insert(size.clone(), active_evaluated.to_vec());
@@ -175,12 +176,11 @@ pub fn evaluate_graded_nest(
             &m,
             &project.ease,
             &project.variables,
-            &project.ops,
+            &active_ops,
             &project.custom_pieces,
         );
 
         if project.grade_mode == GradeMode::RuleBasedRtw {
-            // Apply RTW proportional handle scaling from base piece grade deltas when defined
             pieces = active_evaluated
                 .iter()
                 .map(|base| grade_piece_rtw_proportional(&base.piece, size))
@@ -198,10 +198,11 @@ pub fn evaluate_graded_nest(
             }
         }
 
-        let evals = pieces
+        let mut evals: Vec<EvaluatedPiece> = pieces
             .iter()
-            .map(|p| evaluate_piece(p, stitching, &pieces))
+            .map(|p| evaluate_piece(p, bindings, &pieces))
             .collect();
+        synthesize_partner_notches(&pieces, bindings, &mut evals);
         nest.insert(size.clone(), evals);
     }
     nest
@@ -210,6 +211,7 @@ pub fn evaluate_graded_nest(
 /// Computes the Cross-Size Stitching Balance QA Matrix across all sizes in `size_table.sizes`.
 pub fn compute_cross_size_qa(project: &PatternProject) -> Vec<CrossSizeQaRow> {
     let mut rows: HashMap<String, CrossSizeQaRow> = HashMap::new();
+    let active_ops = project.active_ops();
 
     for size in &project.size_table.sizes {
         let m = project
@@ -220,39 +222,32 @@ pub fn compute_cross_size_qa(project: &PatternProject) -> Vec<CrossSizeQaRow> {
             &m,
             &project.ease,
             &project.variables,
-            &project.ops,
+            &active_ops,
             &project.custom_pieces,
         );
-        let by_id: HashMap<uuid::Uuid, &PatternPiece> =
-            pieces.iter().map(|p| (p.id, p)).collect();
 
-        for link in &stitching.links {
-            let (Some(pa), Some(pb)) = (by_id.get(&link.piece_a), by_id.get(&link.piece_b)) else {
+        for binding in &stitching.bindings {
+            let len_a = interface_total_length(&binding.interface_a, &pieces);
+            let len_b = interface_total_length(&binding.interface_b, &pieces);
+            if len_a < 1.0 || len_b < 1.0 {
                 continue;
-            };
-            let (Some(ea), Some(eb)) = (
-                pa.seam_loop.edges.get(link.edge_a),
-                pb.seam_loop.edges.get(link.edge_b),
-            ) else {
-                continue;
-            };
-            let len_a = edge_total_length(ea);
-            let len_b = edge_total_length(eb);
+            }
             let ease = len_b - len_a;
-            let status = if ease < link.ease_min_mm {
+            let expected = binding.ease.expected_ease_mm(len_a);
+            let status = if ease < binding.ease_min_mm {
                 "tight".to_string()
-            } else if ease > link.ease_max_mm {
+            } else if ease > binding.ease_max_mm {
                 "excess".to_string()
             } else {
                 "ok".to_string()
             };
 
             let row = rows
-                .entry(link.id.to_string())
+                .entry(binding.id.to_string())
                 .or_insert_with(|| CrossSizeQaRow {
-                    link_id: link.id.to_string(),
-                    label: link.label.clone(),
-                    target_ease_mm: link.ease_target_mm,
+                    link_id: binding.id.to_string(),
+                    label: binding.label.clone(),
+                    target_ease_mm: expected,
                     cells: Vec::new(),
                 });
             row.cells.push(CrossSizeQaCell {

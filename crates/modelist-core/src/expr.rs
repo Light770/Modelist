@@ -188,7 +188,21 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<Expr, DagError> {
         match self.next() {
-            Some(Token::Num(v)) => Ok(Expr::Num(v)),
+            Some(Token::Num(v)) => {
+                if let Some(Token::Ident(unit)) = self.peek() {
+                    let mult = match unit.to_ascii_lowercase().as_str() {
+                        "mm" | "deg" => Some(1.0),
+                        "cm" => Some(10.0),
+                        "in" => Some(25.4),
+                        _ => None,
+                    };
+                    if let Some(m) = mult {
+                        self.next();
+                        return Ok(Expr::Num(v * m));
+                    }
+                }
+                Ok(Expr::Num(v))
+            }
             Some(Token::Ident(name)) => {
                 if matches!(self.peek(), Some(Token::LParen)) {
                     self.next();

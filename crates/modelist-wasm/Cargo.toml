@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 modelist-core = { path = "../modelist-core" }
+modelist-sim3d = { path = "../modelist-sim3d" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 serde.workspace = true

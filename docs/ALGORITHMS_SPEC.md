@@ -107,15 +107,17 @@ pub struct PatternPiece {
 }
 ```
 
-### 2.3 Cross-Piece `StitchingGraph`
-A garment is a topological graph where edges across pieces are explicitly paired:
+### 2.3 Cross-Piece `StitchingGraph` (`SeamInterface` & `SeamBinding`)
+Inspired by **GarmentCode** (Korosteleva & Sorkine-Hornung, SIGGRAPH Asia 2023), garments connect **named multi-edge `SeamInterface`s** via **`SeamBinding`s** anchored strictly by deterministic edge UUIDs (`EdgeRef { piece_id, edge_id, dir }`) — never brittle array indices:
 
-* `StitchLink { id, edge_a, dir_a, range_a, edge_b, dir_b, range_b, ease_mm, seam_type, sa_match_rule }`
-* Drives four subsystems from one source:
-  1. **Live Seam-Length Balance Checks:** Instant diff badge (`+14.2 mm ease` on sleeve cap vs. armscye).
-  2. **Seam Walking & Corner Truing:** Rigidly snaps `piece_b` onto `piece_a` along matching arc-length intervals.
-  3. **Matched Seam Allowance Corners:** Computes complementary corner cut angles across joined pieces.
-  4. **3D Virtual Sewing:** Emits 1:1 vertex-to-edge correspondence pairs for the XPBD solver without manual re-stitching.
+* `SeamInterface { id, name, edges: Vec<EdgeRef> }` — bundles multi-edge boundaries (e.g., `Bodice Armhole = [Front Armscye, Back Armscye]`, `Sleeve Cap = [Back Cap, Front Cap]`, `Neckline = [Front Neck, Back Neck]`).
+* `SeamBinding { id, label, interface_a, interface_b, ease: Exact | EaseMm | EasePct | Gather(ratio) | Pleats, driver: DriverA | DriverB | Mutual | MonitorOnly, seam_type, auto_partner_notches }`.
+* Drives five subsystems from one source:
+  1. **Active Fit-to-Partner Solver:** When a driver edge/interface changes (from measurements OR manual drags), a safeguarded 1D secant/Newton solver adjusts the follower interface's declared geometric DOF (e.g., sleeve cap height or curve arch) until `len(follower) == target_len(driver, ease)` within `< 0.05 mm`.
+  2. **Arc-Length Fraction Projection & Auto Partner Notches:** Maps normalized driver arc-length fractions onto the follower interface to synthesize matched partner notches automatically and map multi-edge seams 1:1.
+  3. **Multi-Edge Seam Walking & Corner Truing:** Rolls `piece_b` continuously across multi-edge driver interfaces and aligns joined corners for `G1` / `90°` truing.
+  4. **Berthouzoz-Style Auto-Seam Detection (SIGGRAPH 2013):** Scores candidate boundary edges on imported DXFs by length, curvature compatibility, symmetry, and notches, solving a global assignment to propose `SeamBinding`s automatically.
+  5. **3D Virtual Sewing:** Emits 1:1 vertex correspondence pairs along projected fractions directly to the isolated 3D cloth solver.
 
 ### 2.4 Spatial Acceleration (`rstar`)
 All vertices, curve AABBs, internal lines, and intersection candidates are indexed in a per-piece and workspace **R\*-tree** (`rstar`), keeping cursor snapping (`Endpoint`, `Midpoint`, `OnCurve`, `Perpendicular`, `Tangent`, `Intersection`) and marquee selection under `1 ms` even with 10,000+ entities.
@@ -326,8 +328,8 @@ Legacy factory CAD parsers (Gerber AccuMark, Lectra Modaris, Tukatech) reject mo
 * **Initial 3D Arrangement:** Map each piece onto cylindrical/ellipsoidal body zones (`FrontTorso`, `BackTorso`, `LeftSleeve`, `RightLeg`, etc.) surrounding the avatar, keeping initial poses collision-free while bringing paired seam edges within pull range.
 * **Virtual Sewing Constraints:** Sample paired `(edge_a, edge_b)` links from `StitchingGraph` at matching normalized/eased arc-length stations and emit dynamic XPBD distance constraints (`compliance` ramping down smoothly over the first 30–60 simulation substeps to avoid explosive pulls).
 
-### 9.4 Anisotropic XPBD Cloth Solver (WebGPU Compute Shaders)
-Extended Position-Based Dynamics (XPBD) achieves stable, substep-independent cloth behavior by converting physical material moduli into inverse stiffness **compliance** $\alpha = \tilde{\alpha} / \Delta t^2$:
+### 9.4 Anisotropic XPBD Cloth Solver (with VBD & Offline Oracle Path)
+Extended Position-Based Dynamics (XPBD) achieves stable, substep-independent cloth behavior in-browser (WASM / WebGPU compute) by converting physical material moduli into inverse stiffness **compliance** $\alpha = \tilde{\alpha} / \Delta t^2$. For high stiffness ratios on virtual seams (identified in *Sensitive Couture*, Umetani et al. 2011), **Vertex Block Descent (VBD; Chen et al., SIGGRAPH 2024)** provides the planned Phase 3b GPU upgrade path, while **NVIDIA Warp / Newton** (`Apache-2.0`, CUDA/Python) serves strictly as an optional offline CI validation oracle — never a browser runtime dependency. **ArcSim** is excluded from code reuse due to its non-commercial UC Regents license; **DiffCloth / DiffAvatar** control-cage inverse design is deferred to a future automated fit-optimization phase.
 
 * **Solver Loop (`N_substeps = 8..16` per 60 Hz frame):**
   1. Predict positions $\tilde{\mathbf{x}}_i = \mathbf{x}_i + \Delta t\,\mathbf{v}_i + \Delta t^2\,\mathbf{g}$.

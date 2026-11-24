@@ -1,10 +1,23 @@
-import initWasm, { ModelistSession } from '../wasm-pkg/modelist_wasm.js';
+import initWasm, { ModelistSession, fabric_property_specs_json } from '../wasm-pkg/modelist_wasm.js';
 import { saveAutosave } from './localFiles';
 import type {
+  AvatarBodyForm,
+  AvatarPose,
   CornerRule,
+  DrapeQuality,
+  EaseSpec,
+  FabricFinish,
+  FabricPropertyKey,
+  FabricPropertySpec,
+  GrainRotationMode,
   HitResult,
+  MarkerConfig,
+  MarkerPlan,
   PdfLayoutPlan,
+  SeamDriver,
+  SeamType,
   SeamWalkFrame,
+  Sim3dStats,
   SnapHit,
   UiSnapshot,
 } from './types';
@@ -12,10 +25,12 @@ import type {
 let wasmReady: Promise<void> | null = null;
 let session: ModelistSession | null = null;
 let renderVersion = 1;
+let sim3dVersion = 1;
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function bumpRender() {
   renderVersion += 1;
+  sim3dVersion += 1;
 }
 
 function scheduleAutosave() {
@@ -49,6 +64,20 @@ export function getSession(): ModelistSession {
 
 export function getRenderVersion(): number {
   return renderVersion;
+}
+
+export function getSim3dVersion(): number {
+  return sim3dVersion;
+}
+
+let fabricPropertySpecs: FabricPropertySpec[] | null = null;
+
+/** Editable fabric properties (keys, units, ranges, help), from the kernel. */
+export function getFabricPropertySpecs(): FabricPropertySpec[] {
+  if (!fabricPropertySpecs) {
+    fabricPropertySpecs = JSON.parse(fabric_property_specs_json()) as FabricPropertySpec[];
+  }
+  return fabricPropertySpecs;
 }
 
 export function getSnapshot(): UiSnapshot {
@@ -106,6 +135,118 @@ export const kernel = {
     return getSnapshot();
   },
 
+  setFabricPreset(presetId: string): UiSnapshot {
+    getSession().set_fabric_preset(presetId);
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setFabricColor(colorHex: string): UiSnapshot {
+    getSession().set_fabric_color(colorHex);
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** Edits one physical property of the shell fabric; formulas using fabric_* update too. */
+  setFabricProperty(key: FabricPropertyKey, value: number): UiSnapshot {
+    getSession().set_fabric_property(key, value);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setFabricFinish(finish: FabricFinish): UiSnapshot {
+    getSession().set_fabric_finish(finish);
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  resetFabricToPreset(): UiSnapshot {
+    getSession().reset_fabric_to_preset();
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  /** Assigns a preset to a piece role (e.g. "rib"); '' means "same as shell". */
+  setRoleFabricPreset(role: string, presetId: string): UiSnapshot {
+    getSession().set_role_fabric_preset(role, presetId);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setRoleFabricProperty(role: string, key: FabricPropertyKey, value: number): UiSnapshot {
+    getSession().set_role_fabric_property(role, key, value);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setRoleFabricColor(role: string, colorHex: string): UiSnapshot {
+    getSession().set_role_fabric_color(role, colorHex);
+    sim3dVersion += 1;
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  movePiece(pieceId: string, totalDx: number, totalDy: number, commit: boolean) {
+    getSession().move_piece(pieceId, totalDx, totalDy, commit);
+    bumpRender();
+    if (commit) scheduleAutosave();
+  },
+
+  convertEdgeCurve(pieceId: string, edgeIdx: number, toCubic: boolean): UiSnapshot {
+    getSession().convert_edge_curve(pieceId, edgeIdx, toCubic);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  splitEdgePoint(pieceId: string, edgeIdx: number, paramT: number): UiSnapshot {
+    getSession().split_edge_point(pieceId, edgeIdx, paramT);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setEdgeLength(pieceId: string, edgeIdx: number, targetLenMm: number): UiSnapshot {
+    getSession().set_edge_length(pieceId, edgeIdx, targetLenMm);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  mirrorPiece(pieceId: string): UiSnapshot {
+    getSession().mirror_piece(pieceId);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  duplicatePiece(pieceId: string): UiSnapshot {
+    getSession().duplicate_piece(pieceId);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  addRectPiece(name: string, x0: number, y0: number, x1: number, y1: number): UiSnapshot {
+    getSession().add_rect_piece(name, x0, y0, x1, y1);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setShowMirrorUnfold(show: boolean): UiSnapshot {
+    getSession().set_show_mirror_unfold(show);
+    bumpRender();
+    return getSnapshot();
+  },
+
   setVariable(name: string, expr: string, description = ''): UiSnapshot {
     getSession().set_variable(name, expr, description);
     bumpRender();
@@ -151,6 +292,54 @@ export const kernel = {
   setSelection(pieceId: string | null, edgeIdx: number | null): UiSnapshot {
     getSession().set_selection(pieceId ?? undefined, edgeIdx ?? undefined);
     bumpRender();
+    return getSnapshot();
+  },
+
+  setSelectedBinding(bindingId: string | null): UiSnapshot {
+    getSession().set_selected_binding(bindingId ?? undefined);
+    bumpRender();
+    return getSnapshot();
+  },
+
+  setSeamDraftPreview(
+    edgesA: Array<{ piece_id: string; edge_id: string; dir: 1 | -1 }>,
+    edgesB: Array<{ piece_id: string; edge_id: string; dir: 1 | -1 }>,
+  ) {
+    getSession().set_seam_draft_preview(JSON.stringify(edgesA), JSON.stringify(edgesB));
+    bumpRender();
+  },
+
+  upsertSeamBinding(params: {
+    bindingId: string | null;
+    label: string;
+    edgesA: Array<{ piece_id: string; edge_id: string; dir: 1 | -1 }>;
+    edgesB: Array<{ piece_id: string; edge_id: string; dir: 1 | -1 }>;
+    driver: SeamDriver;
+    ease: EaseSpec;
+    seamType: SeamType;
+    autoPartnerNotches: boolean;
+    syncRecommendedSa: boolean;
+  }): { bindingId: string; snapshot: UiSnapshot } {
+    const bindingId = getSession().upsert_seam_binding(
+      params.bindingId ?? undefined,
+      params.label,
+      JSON.stringify(params.edgesA),
+      JSON.stringify(params.edgesB),
+      params.driver,
+      JSON.stringify(params.ease),
+      params.seamType,
+      params.autoPartnerNotches,
+      params.syncRecommendedSa,
+    );
+    bumpRender();
+    scheduleAutosave();
+    return { bindingId, snapshot: getSnapshot() };
+  },
+
+  deleteSeamBinding(bindingId: string): UiSnapshot {
+    getSession().delete_seam_binding(bindingId);
+    bumpRender();
+    scheduleAutosave();
     return getSnapshot();
   },
 
@@ -201,6 +390,91 @@ export const kernel = {
     return getSnapshot();
   },
 
+  addDrillHole(pieceId: string, x: number, y: number, label = 'Drill'): UiSnapshot {
+    getSession().add_drill_hole(pieceId, x, y, label);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setGrainRotation(pieceId: string, mode: GrainRotationMode): UiSnapshot {
+    getSession().set_grain_rotation(pieceId, mode);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  trueCorner(pieceId: string, edgeIdx: number, square90: boolean): UiSnapshot {
+    getSession().true_corner(pieceId, edgeIdx, square90);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  splitStyleLine(
+    pieceId: string,
+    edgeAIdx: number,
+    tA: number,
+    edgeBIdx: number,
+    tB: number,
+    labelA = '',
+    labelB = '',
+  ): UiSnapshot {
+    getSession().split_style_line(pieceId, edgeAIdx, tA, edgeBIdx, tB, labelA, labelB);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  updateSeamBinding(
+    bindingId: string,
+    driver: SeamDriver,
+    ease: EaseSpec,
+    seamType: SeamType,
+    autoPartnerNotches: boolean,
+  ): UiSnapshot {
+    getSession().update_seam_binding(
+      bindingId,
+      driver,
+      JSON.stringify(ease),
+      seamType,
+      autoPartnerNotches,
+    );
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  createSeamBinding(
+    label: string,
+    pieceAId: string,
+    edgeAId: string,
+    pieceBId: string,
+    edgeBId: string,
+    driver: SeamDriver,
+    ease: EaseSpec,
+  ): UiSnapshot {
+    getSession().create_seam_binding(
+      label,
+      pieceAId,
+      edgeAId,
+      pieceBId,
+      edgeBId,
+      driver,
+      JSON.stringify(ease),
+    );
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  autoDetectSeams(): { count: number; snapshot: UiSnapshot } {
+    const count = getSession().auto_detect_seams();
+    bumpRender();
+    if (count > 0) scheduleAutosave();
+    return { count, snapshot: getSnapshot() };
+  },
+
   pivotDart(
     pieceId: string,
     dartId: string,
@@ -237,6 +511,34 @@ export const kernel = {
 
   removeOp(opId: string): UiSnapshot {
     getSession().remove_op(opId);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  setRollbackIndex(index: number | null): UiSnapshot {
+    getSession().set_rollback_index(index === null ? -1 : index);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  toggleSuppressOp(opId: string): UiSnapshot {
+    getSession().toggle_suppress_op(opId);
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
+  reorderOp(fromIdx: number, toIdx: number): { moved: boolean; snapshot: UiSnapshot } {
+    const moved = getSession().reorder_op(fromIdx, toIdx);
+    bumpRender();
+    if (moved) scheduleAutosave();
+    return { moved, snapshot: getSnapshot() };
+  },
+
+  updateOp(opId: string, patch: Record<string, unknown>): UiSnapshot {
+    getSession().update_op_json(opId, JSON.stringify(patch));
     bumpRender();
     scheduleAutosave();
     return getSnapshot();
@@ -279,8 +581,19 @@ export const kernel = {
     return getSession().export_dxf_aama();
   },
 
+  exportAamaRul(): string {
+    return getSession().export_aama_rul();
+  },
+
   importDxfAama(dxfText: string): { message: string; snapshot: UiSnapshot } {
     const message = getSession().import_dxf_aama(dxfText);
+    bumpRender();
+    scheduleAutosave();
+    return { message, snapshot: getSnapshot() };
+  },
+
+  importGarmentCodeJson(jsonText: string): { message: string; snapshot: UiSnapshot } {
+    const message = getSession().import_garmentcode_json(jsonText);
     bumpRender();
     scheduleAutosave();
     return { message, snapshot: getSnapshot() };
@@ -296,5 +609,56 @@ export const kernel = {
 
   getPdfLayoutPlan(preset: string, unfoldOnFold: boolean): PdfLayoutPlan {
     return JSON.parse(getSession().get_pdf_layout_json(preset, unfoldOnFold)) as PdfLayoutPlan;
+  },
+
+  computeMarkerPlan(cfg: MarkerConfig): MarkerPlan {
+    return JSON.parse(getSession().compute_marker_plan_json(JSON.stringify(cfg))) as MarkerPlan;
+  },
+
+  exportMarkerSvg(cfg: MarkerConfig): string {
+    return getSession().export_marker_svg(JSON.stringify(cfg));
+  },
+
+  // --- On-Demand 3D Virtual Fit API (Strictly Decoupled) ---
+  initSim3d(pose: AvatarPose, bodyForm: AvatarBodyForm = 'female'): Sim3dStats {
+    const stats = JSON.parse(getSession().init_sim3d(pose, bodyForm)) as Sim3dStats;
+    sim3dVersion += 1;
+    return stats;
+  },
+
+  stepSim3d(steps = 1): Sim3dStats | null {
+    return JSON.parse(getSession().step_sim3d(steps)) as Sim3dStats | null;
+  },
+
+  resetSim3d(pose: AvatarPose, bodyForm: AvatarBodyForm = 'female'): Sim3dStats {
+    const stats = JSON.parse(getSession().reset_sim3d(pose, bodyForm)) as Sim3dStats;
+    sim3dVersion += 1;
+    return stats;
+  },
+
+  disposeSim3d() {
+    getSession().dispose_sim3d();
+  },
+
+  /** Poke-through / crease / self-intersection metrics; costs a few ms, poll sparingly. */
+  getSim3dQuality(): DrapeQuality | null {
+    return JSON.parse(getSession().get_sim3d_quality_json()) as DrapeQuality | null;
+  },
+
+  getSim3dBuffers() {
+    const s = getSession();
+    return {
+      clothPos: s.get_sim3d_cloth_positions(),
+      clothNorm: s.get_sim3d_cloth_normals(),
+      clothStrain: s.get_sim3d_cloth_strain(),
+      clothTension: s.get_sim3d_cloth_tension(),
+      clothClearance: s.get_sim3d_cloth_clearance(),
+      clothIdx: s.get_sim3d_cloth_indices(),
+      clothColor: s.get_sim3d_cloth_colors(),
+      avatarPos: s.get_sim3d_avatar_positions(),
+      avatarNorm: s.get_sim3d_avatar_normals(),
+      avatarMask: s.get_sim3d_avatar_torso_mask(),
+      avatarIdx: s.get_sim3d_avatar_indices(),
+    };
   },
 };
