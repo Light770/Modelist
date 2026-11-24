@@ -10,6 +10,7 @@ import {
 } from '../../lib/kernelClient';
 import { formatMm, SEAM_PALETTE, type EdgeRefInfo, type HitResult, type SnapHit } from '../../lib/types';
 import { detectFlickGesture } from '../../lib/cad/radial-menu';
+import { wheelZoomFactor } from '../../lib/cad/zoom';
 import { useStudioStore } from '../../store/studioStore';
 import { t as tr, useT } from '../../lib/i18n';
 import { RadialMarkingMenu } from './RadialMarkingMenu';
@@ -121,7 +122,7 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   const snapshot = useStudioStore((s) => s.snapshot);
   const seamCommand = useStudioStore((s) => s.seamCommand);
   const fitViewSeq = useStudioStore((s) => s.fitViewSeq);
-  const zoomStepDir = useStudioStore((s) => s.zoomStepDir);
+  const zoomStepSeq = useStudioStore((s) => s.zoomStepSeq);
   const toggleLayer = useStudioStore((s) => s.toggleLayer);
   const toggleMirrorUnfold = useStudioStore((s) => s.toggleMirrorUnfold);
 
@@ -175,14 +176,14 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   }, [fitViewSeq]);
 
   useEffect(() => {
-    if (zoomStepDir === 0) return;
+    if (zoomStepSeq === 0) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const ins = visibleInsets(rect);
     const cx = ins.left + (rect.width - ins.left - ins.right) * 0.5;
     const cy = ins.top + (rect.height - ins.top - ins.bottom) * 0.5;
-    const factor = zoomStepDir > 0 ? 1.18 : 1 / 1.18;
+    const factor = useStudioStore.getState().zoomStepFactor;
     const cam = camRef.current;
     const wx = (cx - cam.tx) / cam.scale;
     const wy = (cam.ty - cy) / cam.scale;
@@ -199,7 +200,7 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     );
     dirtyRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoomStepDir]);
+  }, [zoomStepSeq]);
 
   useEffect(() => {
     dirtyRef.current = true;
@@ -1306,20 +1307,27 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     dirtyRef.current = true;
   };
 
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const { sx, sy, wx, wy } = toWorld(e.clientX, e.clientY);
-    const cam = camRef.current;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextScale = Math.max(0.08, Math.min(12, cam.scale * factor));
-    camRef.current = {
-      scale: nextScale,
-      tx: sx - wx * nextScale,
-      ty: sy + wy * nextScale,
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const { sx, sy, wx, wy } = toWorld(e.clientX, e.clientY);
+      const cam = camRef.current;
+      const factor = wheelZoomFactor(e);
+      const nextScale = Math.max(0.08, Math.min(12, cam.scale * factor));
+      camRef.current = {
+        scale: nextScale,
+        tx: sx - wx * nextScale,
+        ty: sy + wy * nextScale,
+      };
+      useStudioStore.getState().setCursorTelemetry({ x: wx, y: wy }, snapRef.current, nextScale * 100);
+      dirtyRef.current = true;
     };
-    useStudioStore.getState().setCursorTelemetry({ x: wx, y: wy }, snapRef.current, nextScale * 100);
-    dirtyRef.current = true;
-  };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   const cursorStyle =
     activeTool === 'pan'
@@ -1343,7 +1351,6 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onContextMenu={handleContextMenu}
-        onWheel={handleWheel}
         style={{ cursor: cursorStyle }}
         className="w-full h-full block touch-none"
       />

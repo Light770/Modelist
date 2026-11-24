@@ -36,8 +36,18 @@ Connects Modelist's Astro + React frontend cleanly to the Rust/WASM CAD kernel w
 ### 4. Local-First File Workflows
 - Persist open `.modelist` archives via browser File System Access API (`showSaveFilePicker` / `showOpenFilePicker`) with IndexedDB autosave recovery snapshots and zero mandatory cloud dependency.
 
+## Current Implementation (`apps/web`)
+
+- **Main-Thread WASM Bridge:** WASM currently runs on the main thread (no Web Worker yet). `apps/web/src/lib/kernelClient.ts` is the sole wrapper around `ModelistSession`, managing `renderVersion`, `sim3dVersion`, and 600 ms debounced IndexedDB autosave (`localFiles.ts`). `apps/web/src/lib/types.ts` mirrors Rust JSON schemas and `apps/web/src/store/studioStore.ts` holds Zustand UI state.
+- **Imperative Viewports:** `Viewport2D.tsx` renders imperatively on Canvas2D; `Viewport3D.tsx` renders on WebGL2 (`React.lazy`).
+- **Studio Chrome (`apps/web/src/components/studio/`):** `StudioRoot`, `TopBar`, `ToolRail`, `ActionRibbon`, `LeftPanel`, `RightInspector`, `ParametricTimeline`, `FabricPanel`, `SeamCommandDialog`, `RadialMarkingMenu`, `ShortcutToolbox`, `ExpressionInput`, `ExportModal`, `SettingsModal`, `StatusBar`.
+- **Pure-TS CAD Helpers (`apps/web/src/lib/cad/`):** `command-palette.ts`, `expression-assist.ts`, `radial-menu.ts`, and `timeline-deps.ts`, covered by unit tests.
+- **i18n, Catalog & Deep Links:** Translations live in `apps/web/src/lib/i18n/` (`en.ts` + typed `fr.ts`; use `useT()` and `useCatalogT()`). Template metadata comes from the kernel via `templateCatalog.ts`. Studio supports `?template=<id>&mode=2d|split|3d&lang=en|fr&tab=<tab>`.
+- **Dev & Build Gotcha:** Root `package.json` has no npm workspaces — run `npm --prefix apps/web install` to install `apps/web` dependencies, and run `npm run build:wasm` after any Rust/WASM API change so `apps/web/src/wasm-pkg` stays in sync.
+
 ## Validation
 
-1. Profile a continuous Bézier handle or dart-pivot drag on a multi-piece graded project with React DevTools Profiler: verify **zero** React component re-renders per pointer-move frame (aside from throttled numeric HUD coordinates if displayed).
-2. Verify `Esc` / right-click cancel cleanly aborts mid-tool state without mutating document history or leaking preview buffers.
-3. Verify undo/redo across structural commands (`PivotDart`, `SlashSpread`, `SplitEdge`) restores identical UUIDs and `StitchingGraph` links.
+1. Run `npm --prefix apps/web run check` (Astro + TypeScript diagnostics) and `npm --prefix apps/web run test:unit` (pure-TS CAD helper tests).
+2. Profile a continuous Bézier handle or dart-pivot drag on a multi-piece graded project with React DevTools Profiler: verify **zero** React component re-renders per pointer-move frame (aside from throttled numeric HUD coordinates if displayed).
+3. Verify `Esc` / right-click cancel cleanly aborts mid-tool state without mutating document history or leaking preview buffers.
+4. Verify undo/redo across structural commands (`PivotDart`, `SlashSpread`, `SplitEdge`) restores identical UUIDs and `StitchingGraph` links.

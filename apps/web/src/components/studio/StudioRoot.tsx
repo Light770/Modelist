@@ -1,8 +1,8 @@
-import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { initKernel, kernel } from '../../lib/kernelClient';
-import { loadAutosave } from '../../lib/localFiles';
+import React, { Suspense, lazy, useEffect, useRef } from 'react';
+import { initKernel } from '../../lib/kernelClient';
 import { openProject, redo, registerInitialDocument, saveProject, undo } from '../../lib/projectActions';
 import { useStudioStore } from '../../store/studioStore';
+import { wheelZoomFactor } from '../../lib/cad/zoom';
 import { useT } from '../../lib/i18n';
 import { AppBar } from './AppBar';
 import { BottomBar } from './BottomBar';
@@ -50,7 +50,6 @@ export const StudioRoot: React.FC = () => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const draggingSplitRef = useRef(false);
   const lastCursorRef = useRef<{ x: number; y: number }>({ x: 520, y: 340 });
-  const [autosaveCandidate, setAutosaveCandidate] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -80,15 +79,11 @@ export const StudioRoot: React.FC = () => {
     }
 
     initKernel(tmpl)
-      .then(async (snap) => {
+      .then((snap) => {
         if (!active) return;
         setSnapshot(registerInitialDocument(snap));
         setReady(true);
         requestFitView();
-        const saved = await loadAutosave();
-        if (saved && saved.jsonText && active) {
-          setAutosaveCandidate(saved.jsonText);
-        }
       })
       .catch((err) => {
         if (!active) return;
@@ -123,14 +118,57 @@ export const StudioRoot: React.FC = () => {
     };
   }, [requestFitView, setSplitRatio]);
 
+  // Lock browser/navigator zoom and route pinch / Ctrl+wheel gestures into the studio viewports
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (e.target instanceof HTMLCanvasElement) return;
+      const factor = wheelZoomFactor(e);
+      if (Math.abs(factor - 1) > 1e-4) {
+        useStudioStore.getState().requestZoomStep(factor >= 1 ? 1 : -1, factor);
+      }
+    };
+    const preventGesture = (e: Event) => {
+      e.preventDefault();
+    };
+    window.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('gesturestart', preventGesture, { passive: false });
+    window.addEventListener('gesturechange', preventGesture, { passive: false });
+    window.addEventListener('gestureend', preventGesture, { passive: false });
+    return () => {
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('gesturestart', preventGesture);
+      window.removeEventListener('gesturechange', preventGesture);
+      window.removeEventListener('gestureend', preventGesture);
+    };
+  }, []);
+
   // Global studio shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod) {
+        if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+          e.preventDefault();
+          useStudioStore.getState().requestZoomStep(1);
+          return;
+        }
+        if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+          e.preventDefault();
+          useStudioStore.getState().requestZoomStep(-1);
+          return;
+        }
+        if (e.key === '0' || e.code === 'Numpad0') {
+          e.preventDefault();
+          useStudioStore.getState().requestFitView();
+          return;
+        }
+      }
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
         return;
       }
-      const mod = e.metaKey || e.ctrlKey;
       if (mod) {
         const key = e.key.toLowerCase();
         if (key === 'z') {
@@ -154,6 +192,27 @@ export const StudioRoot: React.FC = () => {
       }
       if (e.altKey) return;
       const store = useStudioStore.getState();
+      const in3dNav =
+        store.workspaceMode === '3d' ||
+        (document.activeElement instanceof HTMLElement &&
+          document.activeElement.dataset.viewport3d === 'true');
+      if (in3dNav) {
+        const navCodes = new Set([
+          'KeyW',
+          'KeyA',
+          'KeyS',
+          'KeyD',
+          'KeyQ',
+          'KeyE',
+          'ArrowUp',
+          'ArrowDown',
+          'ArrowLeft',
+          'ArrowRight',
+          'PageUp',
+          'PageDown',
+        ]);
+        if (navCodes.has(e.code)) return;
+      }
       switch (e.key.toLowerCase()) {
         case 'v':
           store.setActiveTool('select');
@@ -351,37 +410,6 @@ export const StudioRoot: React.FC = () => {
 
         <PropertiesPanel top={rightOver2d ? RULER_PX + 8 : 8} />
         <DataPanel />
-
-        {/* Local autosave offer */}
-        {autosaveCandidate && (
-          <div
-            className="floating-panel absolute bottom-12 left-1/2 -translate-x-1/2 z-40 px-3 py-2 flex items-center gap-2.5 text-xs"
-            role="status"
-          >
-            <span style={{ color: 'var(--text-secondary)' }}>{t('root.autosave')}</span>
-            <button
-              onClick={() => {
-                try {
-                  setSnapshot(kernel.loadProjectJson(autosaveCandidate));
-                  requestFitView();
-                } finally {
-                  setAutosaveCandidate(null);
-                }
-              }}
-              className="h-[22px] px-2 rounded-[3px] font-medium text-white cursor-pointer"
-              style={{ background: 'var(--accent)' }}
-            >
-              {t('root.restore')}
-            </button>
-            <button
-              onClick={() => setAutosaveCandidate(null)}
-              className="h-[22px] px-2 rounded-[3px] border cursor-pointer hover:bg-[var(--bg-hover)]"
-              style={{ borderColor: 'var(--border-subtle)' }}
-            >
-              {t('root.dismiss')}
-            </button>
-          </div>
-        )}
       </main>
 
       <BottomBar />

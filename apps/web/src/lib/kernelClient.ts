@@ -438,6 +438,23 @@ export const kernel = {
     return getSnapshot();
   },
 
+  setEdgeFinish(
+    pieceId: string,
+    edgeIdx: number,
+    hem: { depth_mm: number; fold_count: number; turn_out?: boolean } | null,
+    elastic: { target_ratio: number; width_mm: number; stiffness_n_m: number } | null,
+  ): UiSnapshot {
+    getSession().set_edge_finish(
+      pieceId,
+      edgeIdx,
+      JSON.stringify(hem),
+      JSON.stringify(elastic),
+    );
+    bumpRender();
+    scheduleAutosave();
+    return getSnapshot();
+  },
+
   addNotch(
     pieceId: string,
     edgeIdx: number,
@@ -682,8 +699,15 @@ export const kernel = {
   },
 
   // --- On-Demand 3D Virtual Fit API (Strictly Decoupled) ---
-  initSim3d(pose: AvatarPose, bodyForm: AvatarBodyForm = 'female'): Sim3dStats {
-    const stats = JSON.parse(getSession().init_sim3d(pose, bodyForm)) as Sim3dStats;
+  initSim3d(
+    pose: AvatarPose,
+    bodyForm: AvatarBodyForm = 'female',
+    spacingMm = 0,
+    selfCollision = true,
+  ): Sim3dStats {
+    const stats = JSON.parse(
+      getSession().init_sim3d_with_options(pose, bodyForm, spacingMm, selfCollision),
+    ) as Sim3dStats;
     sim3dVersion += 1;
     return stats;
   },
@@ -692,10 +716,80 @@ export const kernel = {
     return JSON.parse(getSession().step_sim3d(steps)) as Sim3dStats | null;
   },
 
-  resetSim3d(pose: AvatarPose, bodyForm: AvatarBodyForm = 'female'): Sim3dStats {
-    const stats = JSON.parse(getSession().reset_sim3d(pose, bodyForm)) as Sim3dStats;
+  resetSim3d(
+    pose: AvatarPose,
+    bodyForm: AvatarBodyForm = 'female',
+    spacingMm = 0,
+    selfCollision = true,
+  ): Sim3dStats {
+    const stats = JSON.parse(
+      getSession().init_sim3d_with_options(pose, bodyForm, spacingMm, selfCollision),
+    ) as Sim3dStats;
     sim3dVersion += 1;
     return stats;
+  },
+
+  setSim3dWind(wx: number, wy: number, wz: number) {
+    getSession().set_sim3d_wind(wx, wy, wz);
+  },
+
+  setSim3dSelfCollision(enabled: boolean) {
+    getSession().set_sim3d_self_collision(enabled);
+  },
+
+  pickSim3dVertex(
+    ox: number,
+    oy: number,
+    oz: number,
+    dx: number,
+    dy: number,
+    dz: number,
+  ): { vert: number; pos: [number, number, number] } | null {
+    return JSON.parse(getSession().pick_sim3d_vertex(ox, oy, oz, dx, dy, dz)) as {
+      vert: number;
+      pos: [number, number, number];
+    } | null;
+  },
+
+  grabSim3dStart(vert: number, x: number, y: number, z: number, radius = 0.14) {
+    getSession().grab_sim3d_start(vert, x, y, z, radius);
+  },
+
+  grabSim3dMove(x: number, y: number, z: number) {
+    getSession().grab_sim3d_move(x, y, z);
+  },
+
+  grabSim3dEnd() {
+    getSession().grab_sim3d_end();
+  },
+
+  toggleSim3dPin(vert: number): boolean {
+    return getSession().toggle_sim3d_pin(vert);
+  },
+
+  clearSim3dPins() {
+    getSession().clear_sim3d_pins();
+  },
+
+  getSim3dPinPositions(): Float32Array {
+    return getSession().get_sim3d_pin_positions();
+  },
+
+  getSim3dVbdGpuMeta(): {
+    vertex_count: number;
+    tri_count: number;
+    color_count: number;
+    color_offsets: number[];
+  } | null {
+    return JSON.parse(getSession().get_sim3d_vbd_gpu_meta_json());
+  },
+
+  getSim3dVbdGpuU32(kind: string): Uint32Array {
+    return getSession().get_sim3d_vbd_gpu_u32(kind);
+  },
+
+  getSim3dVbdGpuF32(kind: string): Float32Array {
+    return getSession().get_sim3d_vbd_gpu_f32(kind);
   },
 
   disposeSim3d() {
@@ -715,6 +809,7 @@ export const kernel = {
       clothStrain: s.get_sim3d_cloth_strain(),
       clothTension: s.get_sim3d_cloth_tension(),
       clothClearance: s.get_sim3d_cloth_clearance(),
+      clothSeamMask: s.get_sim3d_cloth_seam_mask(),
       clothIdx: s.get_sim3d_cloth_indices(),
       clothColor: s.get_sim3d_cloth_colors(),
       avatarPos: s.get_sim3d_avatar_positions(),

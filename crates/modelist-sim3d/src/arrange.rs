@@ -415,7 +415,9 @@ fn place_sleeve(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone
         fwd = fwd.scale(-1.0);
     }
     let fwd_sign = if s > 0.0 { -1.0 } else { 1.0 };
-    let cap_origin = a0.add(Vec3::new(0.0, 0.012, 0.0));
+    let cap_h = (y_max - v_widest).max(0.0);
+    let drop_shift = (0.11 - cap_h).clamp(0.0, 0.065);
+    let cap_origin = a0.add(Vec3::new(0.0, 0.014, 0.0)).add(axis.scale(drop_shift));
 
     pm.rest_uv
         .iter()
@@ -432,7 +434,7 @@ fn place_sleeve(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone
                 ((u - x_min) / span_x, span_x)
             };
             // Isometric tube: the row wraps 92% of a circle whose arc equals the row width.
-            let r = (avatar.arm_radius_at(arm_t) + 0.012).max(row_w / (TAU * 0.92));
+            let r = (avatar.arm_radius_at(arm_t) + 0.016).max(row_w / (TAU * 0.92));
             let ang = (xn - 0.5) * (row_w / r);
             let radial = out_top.scale(ang.cos()).add(fwd.scale(fwd_sign * ang.sin()));
             center.add(radial.scale(r))
@@ -451,6 +453,8 @@ fn place_leg(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone, s
     let (l0, l1) = avatar.leg_segment(side);
     let crotch_top = avatar.crotch_y - 0.014;
     let split_yn = 0.72_f32;
+    let leg_below_crotch = span_y * split_yn;
+    let leg_bottom_y = (crotch_top - leg_below_crotch).clamp(avatar.ankle_y, crotch_top - 0.12);
     let z_sign = if is_front { 1.0 } else { -1.0 };
     let blend_low = avatar.crotch_y - 0.050;
 
@@ -461,7 +465,7 @@ fn place_leg(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone, s
             let v_query = v.min(y_max - 0.032);
             let (row_min, row_max) = row_x_bounds(&pm.rest_uv, v_query, x_min, x_max);
             let y = if yn <= split_yn {
-                avatar.ankle_y + (yn / split_yn) * (crotch_top - avatar.ankle_y)
+                leg_bottom_y + (yn / split_yn) * (crotch_top - leg_bottom_y)
             } else {
                 crotch_top
                     + ((yn - split_yn) / (1.0 - split_yn)) * (avatar.waist_y - 0.008 - crotch_top)
@@ -470,7 +474,7 @@ fn place_leg(avatar: &ParametricAvatar, pm: &PanelMesh, zone: ArrangementZone, s
             let u_oi = if side > 0.0 { xn_row } else { 1.0 - xn_row };
             let pelvis_blend =
                 ((y - blend_low) / (avatar.waist_y - blend_low).max(0.1)).clamp(0.0, 1.0);
-            let leg_t = ((crotch_top - y) / (crotch_top - avatar.ankle_y).max(0.1)).clamp(0.0, 1.0);
+            let leg_t = ((crotch_top - y) / (crotch_top - leg_bottom_y).max(0.1)).clamp(0.0, 1.0);
             let cx_leg = l0.x + (l1.x - l0.x) * leg_t;
             let r_leg = (avatar.leg_radius_at(leg_t) + 0.018).max(0.052);
             let phi_leg = (u_oi - 0.5) * 2.75;
@@ -524,6 +528,39 @@ pub(crate) fn place_trim(pm: &PanelMesh, anchors: &[TrimAnchor]) -> Option<Vec<V
     if anchors.len() < 2 {
         return None;
     }
+    let mean_away_y: f32 =
+        anchors.iter().map(|a| a.away.y).sum::<f32>() / anchors.len() as f32;
+    let mut smooth_targets = Vec::with_capacity(anchors.len());
+    let mut smooth_aways = Vec::with_capacity(anchors.len());
+    let inv_2s_t = 1.0 / (2.0 * 14.0 * 14.0);
+    let inv_2s_a = 1.0 / (2.0 * 22.0 * 22.0);
+    for a in anchors {
+        let pa = pm.raw_2d_mm[a.local_idx];
+        let mut t_sum = Vec3::ZERO;
+        let mut wt_sum = 0.0_f32;
+        let mut aw_sum = Vec3::ZERO;
+        let mut wa_sum = 0.0_f32;
+        for b in anchors {
+            let pb = pm.raw_2d_mm[b.local_idx];
+            let d2 = pa.sub(pb).len_sq();
+            if d2 <= 45.0 * 45.0 {
+                let wt = (-d2 * inv_2s_t).exp() as f32;
+                t_sum = t_sum.add(b.target.scale(wt));
+                wt_sum += wt;
+                let wa = (-d2 * inv_2s_a).exp() as f32;
+                aw_sum = aw_sum.add(b.away.scale(wa));
+                wa_sum += wa;
+            }
+        }
+        let t_sm = if wt_sum > 1e-6 { t_sum.scale(1.0 / wt_sum) } else { a.target };
+        let mut aw_sm = if wa_sum > 1e-6 { aw_sum.scale(1.0 / wa_sum).normalized() } else { a.away.normalized() };
+        if mean_away_y > 0.35 {
+            aw_sm = aw_sm.scale(0.30).add(Vec3::new(0.0, 0.70, 0.0)).normalized();
+        }
+        smooth_targets.push(t_sm);
+        smooth_aways.push(aw_sm);
+    }
+
     let out = pm
         .raw_2d_mm
         .iter()
@@ -539,10 +576,9 @@ pub(crate) fn place_trim(pm: &PanelMesh, anchors: &[TrimAnchor]) -> Option<Vec<V
                     best[1] = (d, k);
                 }
             }
-            let a0 = &anchors[best[0].1];
-            let a1 = &anchors[best[1].1];
-            let q0 = pm.raw_2d_mm[a0.local_idx];
-            let q1 = pm.raw_2d_mm[a1.local_idx];
+            let (k0, k1) = (best[0].1, best[1].1);
+            let q0 = pm.raw_2d_mm[anchors[k0].local_idx];
+            let q1 = pm.raw_2d_mm[anchors[k1].local_idx];
             let seg = q1.sub(q0);
             let l2 = seg.len_sq();
             let t = if l2 > 1e-9 {
@@ -553,8 +589,8 @@ pub(crate) fn place_trim(pm: &PanelMesh, anchors: &[TrimAnchor]) -> Option<Vec<V
             let foot = q0.add(seg.scale(t));
             let h = (p.dist(foot) * 0.001) as f32;
             let tf = t as f32;
-            let target = a0.target.add(a1.target.sub(a0.target).scale(tf));
-            let away = a0.away.add(a1.away.sub(a0.away).scale(tf)).normalized();
+            let target = smooth_targets[k0].add(smooth_targets[k1].sub(smooth_targets[k0]).scale(tf));
+            let away = smooth_aways[k0].add(smooth_aways[k1].sub(smooth_aways[k0]).scale(tf)).normalized();
             target.add(away.scale(h))
         })
         .collect();

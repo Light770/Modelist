@@ -79,7 +79,8 @@ pub fn compute_variable_sa_cutline(
     let mut per_edge_offsets: Vec<(Vec<Point2>, f64)> = Vec::with_capacity(n);
 
     for e in edges {
-        let w = e.sa_width_mm.max(0.0);
+        let hem_min = e.hem.map(|h| h.depth_mm).unwrap_or(0.0);
+        let w = e.sa_width_mm.max(hem_min).max(0.0);
         let pts = flatten_edge(e, FLATTEN_TOL_MM);
         if w <= 1e-6 || pts.len() < 2 {
             per_edge_offsets.push((pts, w));

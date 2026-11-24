@@ -33,6 +33,12 @@ Handles Modelist's industrial CAD exchange, publication-ready indie PDFs, and au
 - Discretize curved cutlines into strictly outward-bounding polygons (`<= 0.1 mm` error + `kerf / 2` padding) and enforce fabric grain rotation sets (`{0°}`, `{0°, 180°}`, `{±45°}`, or free), selvedge/fold locking, bundle counts, and flaw exclusion polygons.
 - Run fast Bottom-Left-Fill (BLF) for immediate preview, then stream progressive exploration/compression layouts and utilization `%` from a dedicated **Web Worker**.
 
+## Current Implementation
+
+- `crates/modelist-core/src/interop.rs`: DXF-AAMA R12 export/import, `.rul` export, exact-mm SVG export, POM table/CSV export, PDF layout plan, and GarmentCode JSON import (`import_garmentcode_json`).
+- `crates/modelist-core/src/nesting.rs`: in-house BLF-style marker nesting and marker SVG export (`jagua-rs` / `sparrow` are **not** currently dependencies).
+- `apps/web/src/lib/pdfExporter.ts` + `ExportModal.tsx`: client-side PDF generation via `pdf-lib`.
+
 ## Validation
 
 1. Round-trip test DXF exports through an independent parser (e.g., `ezdxf` / `astm-parser`), verifying piece count, polygon area (`< 0.1%` delta), grainline angle (`< 0.01°`), and notch preservation.

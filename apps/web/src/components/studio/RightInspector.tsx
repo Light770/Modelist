@@ -421,6 +421,135 @@ export const RightInspector: React.FC<{ view: PanelPage }> = ({ view }) => {
                     </select>
                   </div>
                 </div>
+
+                {/* Hem (Ourlet) */}
+                <div className="pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                      {t('inspector.hemLabel')}
+                    </span>
+                    <select
+                      value={selectedEdge.hem ? String(selectedEdge.hem.fold_count) : '0'}
+                      onChange={(e) => {
+                        const fc = Number(e.target.value);
+                        const nextHem =
+                          fc === 0
+                            ? null
+                            : {
+                                depth_mm: selectedEdge.hem?.depth_mm ?? 25,
+                                fold_count: fc,
+                                turn_out: selectedEdge.hem?.turn_out ?? false,
+                              };
+                        setSnapshot(
+                          kernel.setEdgeFinish(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            nextHem,
+                            selectedEdge.elastic ?? null,
+                          ),
+                        );
+                      }}
+                      className="rounded border px-1.5 py-0.5 text-[10px]"
+                      style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
+                    >
+                      <option value="0">{t('inspector.hemNone')}</option>
+                      <option value="1">{t('inspector.hemSingle')}</option>
+                      <option value="2">{t('inspector.hemDouble')}</option>
+                    </select>
+                  </div>
+                  {selectedEdge.hem && (
+                    <div className="grid grid-cols-2 gap-1.5 items-center">
+                      <ExpressionInput
+                        valueMm={selectedEdge.hem.depth_mm}
+                        unit={unit}
+                        onCommitMm={(mm) => {
+                          if (!Number.isFinite(mm) || !selectedEdge.hem) return;
+                          setSnapshot(
+                            kernel.setEdgeFinish(
+                              selectedPiece.id,
+                              selectedEdge.edge_idx,
+                              { ...selectedEdge.hem, depth_mm: Math.max(8, Math.min(80, mm)) },
+                              selectedEdge.elastic ?? null,
+                            ),
+                          );
+                        }}
+                        className="w-full rounded border px-2 py-0.5 text-[10px]"
+                        style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
+                      />
+                      <label className="flex items-center gap-1 text-[10px] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedEdge.hem.turn_out)}
+                          onChange={(e) => {
+                            if (!selectedEdge.hem) return;
+                            setSnapshot(
+                              kernel.setEdgeFinish(
+                                selectedPiece.id,
+                                selectedEdge.edge_idx,
+                                { ...selectedEdge.hem, turn_out: e.target.checked },
+                                selectedEdge.elastic ?? null,
+                              ),
+                            );
+                          }}
+                        />
+                        {t('inspector.hemTurnOut')}
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Elastic Band */}
+                <div className="pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <label className="flex items-center justify-between text-[10px] cursor-pointer mb-1">
+                    <span style={{ color: 'var(--text-secondary)' }}>{t('inspector.elasticLabel')}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedEdge.elastic)}
+                      onChange={(e) => {
+                        const nextEl = e.target.checked
+                          ? { target_ratio: 0.75, width_mm: 35, stiffness_n_m: 200 }
+                          : null;
+                        setSnapshot(
+                          kernel.setEdgeFinish(
+                            selectedPiece.id,
+                            selectedEdge.edge_idx,
+                            selectedEdge.hem ?? null,
+                            nextEl,
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  {selectedEdge.elastic && (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
+                        {t('inspector.elasticGather')}
+                      </span>
+                      <input
+                        type="range"
+                        min={50}
+                        max={95}
+                        step={1}
+                        value={Math.round(selectedEdge.elastic.target_ratio * 100)}
+                        onChange={(e) => {
+                          if (!selectedEdge.elastic) return;
+                          setSnapshot(
+                            kernel.setEdgeFinish(
+                              selectedPiece.id,
+                              selectedEdge.edge_idx,
+                              selectedEdge.hem ?? null,
+                              { ...selectedEdge.elastic, target_ratio: Number(e.target.value) / 100 },
+                            ),
+                          );
+                        }}
+                        className="flex-1"
+                      />
+                      <span className="font-mono-num w-8 text-right">
+                        {Math.round(selectedEdge.elastic.target_ratio * 100)}%
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

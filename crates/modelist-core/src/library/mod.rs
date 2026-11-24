@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub mod boxy_tee;
+pub mod jogger;
 pub mod wide_trouser;
 
 #[cfg(test)]
@@ -172,6 +173,20 @@ pub static TEMPLATE_CATALOG: &[TemplateInfo] = &[
         default_fabric: "cotton_twill",
         role_fabrics: &[],
     },
+    TemplateInfo {
+        id: jogger::TEMPLATE_ID,
+        name: "Relaxed Jogger Sweatpants",
+        category: TemplateCategory::Style,
+        garment: "trousers",
+        silhouette: "jogger",
+        description: "Relaxed fleece sweatpants with an elastic gathered waistband, cuffed rib ankle bands, and finished ankle hems.",
+        tags: &["unisex", "jogger", "elastic", "fleece", "cuff"],
+        measurement_keys: &["waist", "hip", "inseam", "crotch_depth", "waist_to_hip"],
+        ease_keys: &[],
+        view_region: ViewRegion::Legs,
+        default_fabric: "fleece_sweatshirt",
+        role_fabrics: &[("rib", "rib_cuff_elastic")],
+    },
 ];
 
 pub fn template_catalog() -> &'static [TemplateInfo] {
@@ -195,6 +210,7 @@ pub(crate) fn library_default_variables(template_id: &str) -> Option<Vec<Paramet
         wide_trouser::BARREL_ID => {
             Some(wide_trouser::default_variables(wide_trouser::LegShape::Barrel))
         }
+        jogger::TEMPLATE_ID => Some(jogger::default_variables()),
         _ => None,
     }
 }
@@ -222,6 +238,7 @@ pub(crate) fn build_library_template(
             ease,
             vals,
         )),
+        jogger::TEMPLATE_ID => Some(jogger::build(m, ease, vals)),
         _ => None,
     }
 }
@@ -273,6 +290,8 @@ pub(crate) fn line(
         sa_width_mm,
         corner_rule,
         label: label.into(),
+        hem: None,
+        elastic: None,
     }
 }
 
@@ -294,6 +313,8 @@ pub(crate) fn cubic(
         sa_width_mm,
         corner_rule,
         label: label.into(),
+        hem: None,
+        elastic: None,
     }
 }
 

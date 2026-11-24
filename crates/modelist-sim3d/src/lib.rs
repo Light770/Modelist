@@ -1,13 +1,19 @@
 pub mod avatar;
 pub(crate) mod arrange;
 pub mod bvh;
+pub mod closures;
 pub(crate) mod collide;
+pub mod cosserat;
 pub mod diagnostics;
 pub mod mannequin_data;
 pub mod material;
 #[cfg(test)]
 mod material_tests;
 pub mod mesher;
+pub mod seam_physics;
+pub mod self_collide;
+pub mod sizing_map;
+pub mod vbd;
 pub mod xpbd;
 
 #[cfg(test)]
@@ -305,6 +311,102 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_mesher_reduces_vertices_and_drapes_cleanly() {
+        use crate::material::MaterialSet;
+        use crate::xpbd::Sim3dOptions;
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        for (tmpl, preset) in [("bodice_sleeve", "cotton_poplin"), ("aline_skirt", "silk_charmeuse")] {
+            let vars = build_default_variables(tmpl);
+            let (pieces, stitching, _, _) = build_template_pieces(tmpl, &m, &e, &vars, &[], &[]);
+            let mat = MaterialSet::single(&FabricSpec::from_preset(preset));
+            let sim_auto = ClothSimSession::new_with_options(
+                &pieces,
+                &stitching,
+                &m,
+                &mat,
+                AvatarPose::APose,
+                AvatarBodyForm::Female,
+                Sim3dOptions {
+                    mesh_spacing_mm: 0.0,
+                    ..Sim3dOptions::default()
+                },
+            );
+            let sim_fine = ClothSimSession::new_with_options(
+                &pieces,
+                &stitching,
+                &m,
+                &mat,
+                AvatarPose::APose,
+                AvatarBodyForm::Female,
+                Sim3dOptions {
+                    mesh_spacing_mm: 7.0,
+                    ..Sim3dOptions::default()
+                },
+            );
+            let st = sim_auto.stats();
+            let st_fine = sim_fine.stats();
+            assert!(st.adaptive_mesh);
+            assert!(
+                st.min_edge_mm < st.max_edge_mm * 0.85,
+                "{tmpl}: expected non-uniform edges, got {:.1}..{:.1} mm",
+                st.min_edge_mm,
+                st.max_edge_mm
+            );
+            assert!(
+                st.vertex_count < st_fine.vertex_count,
+                "{tmpl}: adaptive ({}) should have fewer verts than uniform 7mm ({})",
+                st.vertex_count,
+                st_fine.vertex_count
+            );
+            assert!(sim_auto.flat_positions.iter().all(|v| v.is_finite()));
+            let q = sim_auto.drape_quality();
+            assert!(q.poke_through_count <= 2, "{tmpl} adaptive poke-through {q:?}");
+        }
+    }
+
+    #[test]
+    fn test_interactive_grab_and_pin_moves_cloth() {
+        let mut sim = drape("boxy_tee", "cotton_poplin", 20);
+        let target_v = 10usize.min(sim.flat_positions.len() / 3 - 1);
+        let orig = [
+            sim.flat_positions[target_v * 3],
+            sim.flat_positions[target_v * 3 + 1],
+            sim.flat_positions[target_v * 3 + 2],
+        ];
+        assert!(sim.toggle_pin(target_v));
+        assert_eq!(sim.stats().pin_count, 1);
+        sim.step(10);
+        let pinned_after = [
+            sim.flat_positions[target_v * 3],
+            sim.flat_positions[target_v * 3 + 1],
+            sim.flat_positions[target_v * 3 + 2],
+        ];
+        let pin_drift = ((pinned_after[0] - orig[0]).powi(2)
+            + (pinned_after[1] - orig[1]).powi(2)
+            + (pinned_after[2] - orig[2]).powi(2))
+        .sqrt();
+        assert!(pin_drift < 0.005, "Pinned vertex drifted {pin_drift:.4} m");
+
+        sim.clear_pins();
+        assert_eq!(sim.stats().pin_count, 0);
+        let pull_target = [orig[0] + 0.08, orig[1] + 0.04, orig[2] + 0.08];
+        sim.begin_grab(target_v, pull_target, 0.12);
+        sim.step(12);
+        let grabbed = [
+            sim.flat_positions[target_v * 3],
+            sim.flat_positions[target_v * 3 + 1],
+            sim.flat_positions[target_v * 3 + 2],
+        ];
+        let moved = ((grabbed[0] - orig[0]).powi(2)
+            + (grabbed[1] - orig[1]).powi(2)
+            + (grabbed[2] - orig[2]).powi(2))
+        .sqrt();
+        assert!(moved > 0.015, "Grab did not pull vertex enough: {moved:.4} m");
+        sim.end_grab();
+    }
+
+    #[test]
     fn test_avatar_anatomical_arms_hands_and_smooth_seams() {
         let tmpl = get_template();
         let m = BodyMeasurements::default();
@@ -423,5 +525,194 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_watertight_conformal_seams_adaptive_and_uniform() {
+        use crate::material::MaterialSet;
+        use crate::xpbd::Sim3dOptions;
+
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let vars = build_default_variables("bodice_sleeve");
+        let (pieces, stitching, _, _) =
+            build_template_pieces("bodice_sleeve", &m, &e, &vars, &[], &[]);
+        let materials = MaterialSet::single(&FabricSpec::from_preset("cotton_poplin"));
+
+        for (label, spacing_mm) in [("adaptive", 0.0_f64), ("uniform_20mm", 20.0_f64)] {
+            let opts = Sim3dOptions {
+                mesh_spacing_mm: spacing_mm,
+                ..Sim3dOptions::default()
+            };
+            let mut sim = ClothSimSession::new_with_options(
+                &pieces,
+                &stitching,
+                &m,
+                &materials,
+                AvatarPose::APose,
+                AvatarBodyForm::Female,
+                opts,
+            );
+            sim.step(60);
+            let (avg_gap_mm, max_gap_mm) = sim.seam_gap_stats_mm();
+            let weld_count = sim.seam_weld_cluster_count();
+            let j3 = sim.junction_cluster_count(3);
+            let j4 = sim.junction_cluster_count(4);
+            let max_cluster = sim.max_junction_cluster_size();
+            let max_spread = sim.max_weld_spread_mm();
+            let q = sim.drape_quality();
+            println!(
+                "[{label}] welds={weld_count} j3={j3} j4={j4} max_cluster={max_cluster} avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm max_spread={max_spread:.3}mm {q:?}"
+            );
+            assert!(weld_count > 20, "{label}: expected > 20 weld clusters, got {weld_count}");
+            assert!(j3 >= 4, "{label}: expected >= 4 3-way+ junctions, got {j3}");
+            assert!(j4 >= 2, "{label}: expected >= 2 4-way underarm junctions, got {j4}");
+            assert!(avg_gap_mm < 0.02, "{label}: avg seam gap {avg_gap_mm:.3} mm");
+            assert!(max_gap_mm < 0.05, "{label}: max seam gap {max_gap_mm:.3} mm");
+            assert!(max_spread < 0.05, "{label}: max weld spread {max_spread:.3} mm");
+            assert!(q.poke_through_count <= 5, "{label}: poke-through {q:?}");
+            assert!(q.sharp_crease_pct < 5.0, "{label}: sharp_crease_pct {q:?}");
+            assert!(
+                sim.stats().motion_mm_s < 15.0,
+                "{label}: garment still vibrating ({:.1} mm/s)",
+                sim.stats().motion_mm_s
+            );
+        }
+    }
+
+    #[test]
+    fn test_3way_and_4way_junctions_crotch_and_style_split() {
+        use crate::material::MaterialSet;
+        use crate::xpbd::Sim3dOptions;
+
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let materials = MaterialSet::single(&FabricSpec::from_preset("cotton_poplin"));
+        let adaptive_opts = Sim3dOptions {
+            mesh_spacing_mm: 0.0,
+            ..Sim3dOptions::default()
+        };
+
+        // 1. Trouser block: 4-way crotch junction (Front L/R + Back L/R inseam/crotch/seat).
+        {
+            let vars = build_default_variables("trouser_block");
+            let (pieces, stitching, _, _) =
+                build_template_pieces("trouser_block", &m, &e, &vars, &[], &[]);
+            let mut sim = ClothSimSession::new_with_options(
+                &pieces,
+                &stitching,
+                &m,
+                &materials,
+                AvatarPose::APose,
+                AvatarBodyForm::Female,
+                adaptive_opts,
+            );
+            sim.step(60);
+            let (avg_gap_mm, max_gap_mm) = sim.seam_gap_stats_mm();
+            let j4 = sim.junction_cluster_count(4);
+            let max_spread = sim.max_weld_spread_mm();
+            let q = sim.drape_quality();
+            println!(
+                "[trouser_4way] j4={j4} avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm max_spread={max_spread:.3}mm {q:?}"
+            );
+            assert!(j4 >= 1, "trouser_block: expected >= 1 4-way crotch junction, got {j4}");
+            assert!(max_gap_mm < 0.05, "trouser_block: max seam gap {max_gap_mm:.3} mm");
+            assert!(max_spread < 0.05, "trouser_block: max weld spread {max_spread:.3} mm");
+            assert!(q.sharp_crease_pct < 5.0, "trouser_block: sharp_crease_pct {q:?}");
+        }
+
+        // 2. Style-split bodice: 3-way T-junctions where Back Yoke + Lower Back meet Armhole/CB.
+        {
+            let vars = build_default_variables("bodice_sleeve");
+            let ops = vec![ParametricOp::SplitStyleLine {
+                id: det_id("op:3d_style_yoke_junc"),
+                piece_id: det_id("piece:bodice_back"),
+                edge_a_idx: 2,
+                t_a: 0.45,
+                edge_b_idx: 5,
+                t_b: 0.25,
+                label_a: "Back Yoke".into(),
+                label_b: "Lower Back".into(),
+            }];
+            let (pieces, stitching, _, _) =
+                build_template_pieces("bodice_sleeve", &m, &e, &vars, &ops, &[]);
+            let mut sim = ClothSimSession::new_with_options(
+                &pieces,
+                &stitching,
+                &m,
+                &materials,
+                AvatarPose::APose,
+                AvatarBodyForm::Female,
+                adaptive_opts,
+            );
+            sim.step(60);
+            let (avg_gap_mm, max_gap_mm) = sim.seam_gap_stats_mm();
+            let j3 = sim.junction_cluster_count(3);
+            let max_spread = sim.max_weld_spread_mm();
+            let q = sim.drape_quality();
+            println!(
+                "[style_split_3way] j3={j3} avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm max_spread={max_spread:.3}mm {q:?}"
+            );
+            assert!(j3 >= 4, "style_split: expected >= 4 3-way junctions, got {j3}");
+            assert!(max_gap_mm < 0.05, "style_split: max seam gap {max_gap_mm:.3} mm");
+            assert!(max_spread < 0.05, "style_split: max weld spread {max_spread:.3} mm");
+            assert!(q.sharp_crease_pct < 5.0, "style_split: sharp_crease_pct {q:?}");
+        }
+    }
+
+    #[test]
+    fn test_jogger_pants_elastic_cuffs_waist_and_hem_drape() {
+        use crate::material::MaterialSet;
+        use crate::xpbd::Sim3dOptions;
+
+        let m = BodyMeasurements::default();
+        let e = EaseTable::default();
+        let vars = build_default_variables("jogger_pants");
+        let (pieces, stitching, _, errors) =
+            build_template_pieces("jogger_pants", &m, &e, &vars, &[], &[]);
+        assert!(errors.is_empty(), "jogger_pants DAG errors: {errors:?}");
+
+        let mut materials = MaterialSet::single(&FabricSpec::from_preset("fleece_sweatshirt"));
+        materials.roles.push(("rib".into(), FabricSpec::from_preset("rib_cuff_elastic")));
+
+        let opts = Sim3dOptions {
+            mesh_spacing_mm: 0.0,
+            ..Sim3dOptions::default()
+        };
+        let mut sim = ClothSimSession::new_with_options(
+            &pieces,
+            &stitching,
+            &m,
+            &materials,
+            AvatarPose::APose,
+            AvatarBodyForm::Female,
+            opts,
+        );
+        sim.step(150);
+        let (avg_gap_mm, max_gap_mm) = sim.seam_gap_stats_mm();
+        let (el_cur_mm, el_orig_mm) = sim.elastic_band_length_mm();
+        let q = sim.drape_quality();
+        let motion = sim.stats().motion_mm_s;
+        let p99_motion = sim.p99_motion_mm_s();
+        let max_motion = sim.max_motion_mm_s();
+        println!(
+            "[jogger_pants] avg_gap={avg_gap_mm:.3}mm max_gap={max_gap_mm:.3}mm elastic={el_cur_mm:.1}/{el_orig_mm:.1}mm motion={motion:.2}mm/s p99={p99_motion:.2}mm/s max={max_motion:.2}mm/s {q:?}"
+        );
+        assert!(el_orig_mm > 500.0, "expected active elastic bands on jogger_pants");
+        assert!(
+            el_cur_mm < el_orig_mm * 0.99,
+            "elastic bands did not contract enough: {el_cur_mm:.1} vs {el_orig_mm:.1} mm"
+        );
+        assert!(max_gap_mm < 0.05, "jogger_pants seam gap {max_gap_mm:.3} mm");
+        assert!(sim.max_weld_spread_mm() < 0.05);
+        assert!(q.sharp_crease_pct < 3.0, "jogger_pants sharp_crease_pct {q:?}");
+        assert!(q.poke_through_count == 0, "jogger_pants poke_through {q:?}");
+        assert!(motion < 5.0, "jogger_pants still vibrating ({motion:.2} mm/s)");
+        assert!(p99_motion < 35.0, "jogger_pants p99 still vibrating ({p99_motion:.2} mm/s)");
+        let r_verts = sim.render_positions().len() / 3;
+        assert!(sim.render_positions().len() > sim.flat_positions.len() * 2);
+        assert!(sim.render_indices().iter().all(|&idx| (idx as usize) < r_verts));
+        assert!(sim.render_positions().iter().all(|v| v.is_finite()));
+        assert!(sim.render_normals().iter().all(|v| v.is_finite()));
     }
 }

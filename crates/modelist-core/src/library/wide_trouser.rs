@@ -215,8 +215,14 @@ pub fn build(
         "Front Outseam",
     );
     let (f_j_c1, f_j_c2) = j_curve_ctrl(f_p2, f_hip_cf, f_p3, 0.5 * f_fork, 0.0);
+    let mut f_hem_edge = line(fe("hem"), f_p0, f_p1, 40.0, CornerRule::FoldedHem, "Front Hem");
+    f_hem_edge.hem = Some(crate::model::HemSpec {
+        depth_mm: 35.0,
+        fold_count: 2,
+        turn_out: false,
+    });
     let front_edges = vec![
-        line(fe("hem"), f_p0, f_p1, 40.0, CornerRule::FoldedHem, "Front Hem"),
+        f_hem_edge,
         cubic(fe("inseam"), f_p1, f_in_c1, f_in_c2, f_p2, 15.0, MITER, "Front Inseam"),
         cubic(fe("crotch"), f_p2, f_j_c1, f_j_c2, f_hip_cf, 12.0, MITER, "Front Crotch J-Curve"),
         line(fe("cf"), f_hip_cf, f_p3, 12.0, MITER, "Front Crotch (CF Line)"),
@@ -384,8 +390,14 @@ pub fn build(
         "Back Outseam",
     );
     let (b_j_c1, b_j_c2) = j_curve_ctrl(b_p2, b_hip_cb, b_p3, 0.55 * b_fork, 2.0);
+    let mut b_hem_edge = line(be("hem"), b_p0, b_p1, 40.0, CornerRule::FoldedHem, "Back Hem");
+    b_hem_edge.hem = Some(crate::model::HemSpec {
+        depth_mm: 35.0,
+        fold_count: 2,
+        turn_out: false,
+    });
     let back_edges = vec![
-        line(be("hem"), b_p0, b_p1, 40.0, CornerRule::FoldedHem, "Back Hem"),
+        b_hem_edge,
         cubic(be("inseam"), b_p1, b_in_c1, b_in_c2, b_p2, 15.0, MITER, "Back Inseam"),
         cubic(be("crotch"), b_p2, b_j_c1, b_j_c2, b_hip_cb, 12.0, MITER, "Back Crotch Curve"),
         line(be("seat"), b_hip_cb, b_p3, 15.0, MITER, "Back Seat Seam"),

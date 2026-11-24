@@ -164,7 +164,9 @@ export interface StudioState {
   measureReadout: { dx: number; dy: number; dist: number; angleDeg: number } | null;
   statusMessage: string | null;
   fitViewSeq: number;
+  zoomStepSeq: number;
   zoomStepDir: number;
+  zoomStepFactor: number;
 
   // Fission-inspired Muscle-Memory & Timeline State
   lastCommandId: string | null;
@@ -243,7 +245,7 @@ export interface StudioState {
   setMeasureReadout: (r: StudioState['measureReadout']) => void;
   setStatusMessage: (msg: string | null) => void;
   requestFitView: () => void;
-  requestZoomStep: (dir: number) => void;
+  requestZoomStep: (dir: number, factor?: number) => void;
 
   // Fission-inspired Muscle-Memory & Timeline Actions
   openShortcutToolbox: (x?: number, y?: number) => void;
@@ -360,7 +362,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   measureReadout: null,
   statusMessage: null,
   fitViewSeq: 1,
+  zoomStepSeq: 0,
   zoomStepDir: 0,
+  zoomStepFactor: 1,
 
   lastCommandId: 'sew_segment',
   shortcutToolbox: null,
@@ -760,7 +764,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setMeasureReadout: (measureReadout) => set({ measureReadout }),
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   requestFitView: () => set((s) => ({ fitViewSeq: s.fitViewSeq + 1 })),
-  requestZoomStep: (dir) => set((s) => ({ zoomStepDir: s.zoomStepDir + dir })),
+  requestZoomStep: (dir, factor) =>
+    set((s) => ({
+      zoomStepSeq: s.zoomStepSeq + 1,
+      zoomStepDir: dir,
+      zoomStepFactor: factor ?? (dir > 0 ? 1.18 : 1 / 1.18),
+    })),
 
   openShortcutToolbox: (x, y) =>
     set({

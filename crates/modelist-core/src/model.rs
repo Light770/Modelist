@@ -174,6 +174,27 @@ impl Default for CornerRule {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HemSpec {
+    /// Finished hem depth in mm (e.g. 15–40 mm).
+    pub depth_mm: f64,
+    /// 1 = single-fold/overlocked hem, 2 = double-fold enclosed hem.
+    pub fold_count: u8,
+    /// True for an exterior turn-up cuff (*revers*), false for inward ourlet.
+    #[serde(default)]
+    pub turn_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ElasticBandSpec {
+    /// Ratio of finished relaxed elastic length to drafted pattern edge length (0.45..1.0).
+    pub target_ratio: f64,
+    /// Elastic width in mm (used for homogenized casing mass/bend band).
+    pub width_mm: f64,
+    /// Elastic tensile stiffness in N/m (120–350 N/m typical).
+    pub stiffness_n_m: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolyEdge {
     pub id: Uuid,
@@ -182,6 +203,10 @@ pub struct PolyEdge {
     pub sa_width_mm: f64,
     pub corner_rule: CornerRule,
     pub label: String,
+    #[serde(default)]
+    pub hem: Option<HemSpec>,
+    #[serde(default)]
+    pub elastic: Option<ElasticBandSpec>,
 }
 
 impl PolyEdge {
@@ -266,6 +291,8 @@ impl ClosedPolyCurve {
                 sa_width_mm: e.sa_width_mm,
                 corner_rule: e.corner_rule,
                 label: e.label.clone(),
+                hem: e.hem,
+                elastic: e.elastic,
             });
         }
         self.edges = rev;
@@ -544,6 +571,15 @@ pub enum SeamType {
     Gathered,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeamPhysicsSpec {
+    pub mass_mult: f32,
+    pub bend_mult: f32,
+    pub tensile_mult: f32,
+    pub fold_angle_deg: f32,
+    pub shader_code: f32,
+}
+
 impl SeamType {
     pub fn recommended_sa_mm(self) -> f64 {
         match self {
@@ -552,6 +588,47 @@ impl SeamType {
             Self::French => 15.0,
             Self::FlatFelled => 16.0,
             Self::Gathered => 12.0,
+        }
+    }
+
+    /// Physical homogenization multipliers for the seam-allowance band (Pabst 2008 / True Seams 2022).
+    pub fn physics_spec(self) -> SeamPhysicsSpec {
+        match self {
+            Self::Plain => SeamPhysicsSpec {
+                mass_mult: 1.85,
+                bend_mult: 2.4,
+                tensile_mult: 1.6,
+                fold_angle_deg: 0.0,
+                shader_code: 1.0,
+            },
+            Self::Overlock => SeamPhysicsSpec {
+                mass_mult: 2.0,
+                bend_mult: 2.8,
+                tensile_mult: 1.4,
+                fold_angle_deg: 12.0,
+                shader_code: 2.0,
+            },
+            Self::FlatFelled => SeamPhysicsSpec {
+                mass_mult: 3.6,
+                bend_mult: 6.2,
+                tensile_mult: 3.5,
+                fold_angle_deg: 8.0,
+                shader_code: 3.0,
+            },
+            Self::French => SeamPhysicsSpec {
+                mass_mult: 3.2,
+                bend_mult: 4.8,
+                tensile_mult: 2.5,
+                fold_angle_deg: 25.0,
+                shader_code: 4.0,
+            },
+            Self::Gathered => SeamPhysicsSpec {
+                mass_mult: 2.2,
+                bend_mult: 2.6,
+                tensile_mult: 2.0,
+                fold_angle_deg: 0.0,
+                shader_code: 1.0,
+            },
         }
     }
 }
@@ -1067,6 +1144,10 @@ pub const FABRIC_PRESET_IDS: &[&str] = &[
     "cotton_jersey_heavy",
     "rib_knit",
     "french_terry",
+    "fleece_sweatshirt",
+    "jersey_elastane_4way",
+    "rib_cuff_elastic",
+    "woven_elastic_band",
 ];
 
 impl FabricSpec {
@@ -1101,6 +1182,10 @@ impl FabricSpec {
             "cotton_jersey_heavy" => fabric_preset(id, "Heavyweight Cotton Jersey (240 gsm)", Knit, "100% cotton", F::Jersey, 240.0, 0.75, (450.0, 220.0), 35.0, (5.5, 3.5), (15.0, 30.0), 0.20, 0.50, 0.30, (0.0, 0.0), "#3a3c40"),
             "rib_knit" => fabric_preset(id, "2x2 Rib Knit (280 gsm)", Knit, "95% cotton / 5% elastane", F::Rib, 280.0, 1.00, (350.0, 70.0), 25.0, (6.0, 2.5), (30.0, 100.0), 0.15, 0.55, 0.30, (0.0, 0.0), "#3a3c40"),
             "french_terry" => fabric_preset(id, "French Terry (330 gsm)", Knit, "100% cotton", F::Terry, 330.0, 1.30, (500.0, 250.0), 40.0, (15.0, 9.0), (15.0, 35.0), 0.20, 0.55, 0.30, (0.0, 0.0), "#8d9096"),
+            "fleece_sweatshirt" => fabric_preset(id, "Brushed Sweatshirt Fleece (360 gsm)", Knit, "80% cotton / 20% polyester", F::Terry, 360.0, 1.65, (520.0, 260.0), 42.0, (22.0, 14.0), (15.0, 38.0), 0.22, 0.58, 0.34, (0.0, 0.0), "#6c737c"),
+            "jersey_elastane_4way" => fabric_preset(id, "4-Way Stretch Active Jersey (220 gsm)", Knit, "82% nylon / 18% elastane", F::Jersey, 220.0, 0.62, (180.0, 140.0), 28.0, (2.8, 2.2), (60.0, 85.0), 0.14, 0.44, 0.28, (0.0, 0.0), "#2b3342"),
+            "rib_cuff_elastic" => fabric_preset(id, "Elastic 2x2 Rib Cuff (340 gsm)", Knit, "92% cotton / 8% elastane", F::Rib, 340.0, 1.20, (380.0, 95.0), 30.0, (9.0, 4.0), (30.0, 110.0), 0.16, 0.56, 0.32, (0.0, 0.0), "#565c64"),
+            "woven_elastic_band" => fabric_preset(id, "Woven Elastic Band (420 gsm)", Knit, "70% polyester / 30% elastodiene", F::Rib, 420.0, 1.40, (500.0, 180.0), 45.0, (18.0, 10.0), (15.0, 95.0), 0.20, 0.55, 0.34, (0.0, 0.0), "#34383f"),
             _ => return None,
         })
     }
@@ -1459,6 +1544,13 @@ pub enum ParametricOp {
         id: Uuid,
         piece_id: Uuid,
     },
+    SetEdgeFinish {
+        id: Uuid,
+        piece_id: Uuid,
+        edge_idx: usize,
+        hem: Option<HemSpec>,
+        elastic: Option<ElasticBandSpec>,
+    },
 }
 
 impl ParametricOp {
@@ -1482,7 +1574,8 @@ impl ParametricOp {
             | Self::ConvertEdgeCurve { id, .. }
             | Self::SplitEdgePoint { id, .. }
             | Self::SetEdgeLength { id, .. }
-            | Self::MirrorPiece { id, .. } => id,
+            | Self::MirrorPiece { id, .. }
+            | Self::SetEdgeFinish { id, .. } => id,
         }
     }
 
@@ -1543,6 +1636,19 @@ impl ParametricOp {
                 format!("Set Edge #{edge_idx} Length -> {target_len_mm:.1} mm")
             }
             Self::MirrorPiece { .. } => "Flip / Mirror Piece".into(),
+            Self::SetEdgeFinish { edge_idx, hem, elastic, .. } => {
+                format!(
+                    "Edge #{edge_idx} Finish ({}{})",
+                    if hem.is_some() { "Hem" } else { "" },
+                    if elastic.is_some() {
+                        if hem.is_some() { "+Elastic" } else { "Elastic" }
+                    } else if hem.is_none() {
+                        "Clear"
+                    } else {
+                        ""
+                    }
+                )
+            }
         }
     }
 
@@ -1567,6 +1673,7 @@ impl ParametricOp {
             Self::SplitEdgePoint { .. } => "split_edge_point",
             Self::SetEdgeLength { .. } => "set_edge_length",
             Self::MirrorPiece { .. } => "mirror_piece",
+            Self::SetEdgeFinish { .. } => "set_edge_finish",
         }
     }
 
@@ -1586,7 +1693,8 @@ impl ParametricOp {
             | Self::ConvertEdgeCurve { piece_id, .. }
             | Self::SplitEdgePoint { piece_id, .. }
             | Self::SetEdgeLength { piece_id, .. }
-            | Self::MirrorPiece { piece_id, .. } => vec![*piece_id],
+            | Self::MirrorPiece { piece_id, .. }
+            | Self::SetEdgeFinish { piece_id, .. } => vec![*piece_id],
             Self::AddSeamBinding { binding, .. } | Self::ReplaceSeamBinding { binding, .. } => {
                 let mut ids = Vec::new();
                 for er in binding

@@ -29,7 +29,7 @@ use modelist_core::model::{
 };
 use modelist_sim3d::avatar::{AvatarBodyForm, AvatarPose};
 use modelist_sim3d::material::MaterialSet;
-use modelist_sim3d::xpbd::ClothSimSession;
+use modelist_sim3d::xpbd::{ClothSimSession, Sim3dOptions};
 use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -54,6 +54,8 @@ struct EdgeInfo {
     corner_rule: CornerRule,
     is_cubic: bool,
     is_fold: bool,
+    hem: Option<modelist_core::model::HemSpec>,
+    elastic: Option<modelist_core::model::ElasticBandSpec>,
 }
 
 #[derive(Serialize)]
@@ -906,6 +908,32 @@ impl ModelistSession {
         self.recompute();
     }
 
+    pub fn set_edge_finish(
+        &mut self,
+        piece_id: &str,
+        edge_idx: usize,
+        hem_json: &str,
+        elastic_json: &str,
+    ) {
+        let Ok(pid) = Uuid::parse_str(piece_id) else {
+            return;
+        };
+        let hem: Option<modelist_core::model::HemSpec> =
+            serde_json::from_str(hem_json).unwrap_or(None);
+        let elastic: Option<modelist_core::model::ElasticBandSpec> =
+            serde_json::from_str(elastic_json).unwrap_or(None);
+        self.push_undo();
+        let id = self.next_op_id("set_finish");
+        self.insert_op(ParametricOp::SetEdgeFinish {
+            id,
+            piece_id: pid,
+            edge_idx,
+            hem,
+            elastic,
+        });
+        self.recompute();
+    }
+
     pub fn add_notch(
         &mut self,
         piece_id: &str,
@@ -1349,6 +1377,16 @@ impl ModelistSession {
 
     // --- Strictly Decoupled On-Demand 3D Virtual Fit API ---
     pub fn init_sim3d(&mut self, pose: &str, body_form: &str) -> String {
+        self.init_sim3d_with_options(pose, body_form, 0.0, true)
+    }
+
+    pub fn init_sim3d_with_options(
+        &mut self,
+        pose: &str,
+        body_form: &str,
+        spacing_mm: f64,
+        self_collision: bool,
+    ) -> String {
         let avatar_pose = match pose {
             "arms_raised" => AvatarPose::ArmsRaised,
             "t_pose" => AvatarPose::TPose,
@@ -1360,17 +1398,115 @@ impl ModelistSession {
             _ => AvatarBodyForm::Female,
         };
         let raw_pieces: Vec<_> = self.evaluated.iter().map(|e| e.piece.clone()).collect();
-        let sim = ClothSimSession::new_with_materials(
+        let options = Sim3dOptions {
+            mesh_spacing_mm: spacing_mm,
+            enable_self_collision: self_collision,
+            ..Sim3dOptions::default()
+        };
+        let sim = ClothSimSession::new_with_options(
             &raw_pieces,
             &self.stitching,
             &self.project.measurements,
             &MaterialSet::from_project(&self.project),
             avatar_pose,
             avatar_form,
+            options,
         );
         let stats_json = serde_json::to_string(&sim.stats()).unwrap_or_else(|_| "{}".into());
         self.sim3d = Some(sim);
         stats_json
+    }
+
+    pub fn set_sim3d_wind(&mut self, wx: f32, wy: f32, wz: f32) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.set_wind([wx, wy, wz]);
+        }
+    }
+
+    pub fn set_sim3d_self_collision(&mut self, enabled: bool) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.set_self_collision(enabled);
+        }
+    }
+
+    pub fn pick_sim3d_vertex(
+        &self,
+        ox: f32,
+        oy: f32,
+        oz: f32,
+        dx: f32,
+        dy: f32,
+        dz: f32,
+    ) -> String {
+        let Some(ref sim) = self.sim3d else {
+            return "null".into();
+        };
+        match sim.pick_vertex([ox, oy, oz], [dx, dy, dz]) {
+            Some((vert, pos)) => format!(
+                "{{\"vert\":{vert},\"pos\":[{:.6},{:.6},{:.6}]}}",
+                pos[0], pos[1], pos[2]
+            ),
+            None => "null".into(),
+        }
+    }
+
+    pub fn grab_sim3d_start(&mut self, vert: usize, x: f32, y: f32, z: f32, radius: f32) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.begin_grab(vert, [x, y, z], radius);
+        }
+    }
+
+    pub fn grab_sim3d_move(&mut self, x: f32, y: f32, z: f32) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.move_grab([x, y, z]);
+        }
+    }
+
+    pub fn grab_sim3d_end(&mut self) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.end_grab();
+        }
+    }
+
+    pub fn toggle_sim3d_pin(&mut self, vert: usize) -> bool {
+        self.sim3d
+            .as_mut()
+            .map(|sim| sim.toggle_pin(vert))
+            .unwrap_or(false)
+    }
+
+    pub fn clear_sim3d_pins(&mut self) {
+        if let Some(ref mut sim) = self.sim3d {
+            sim.clear_pins();
+        }
+    }
+
+    pub fn get_sim3d_pin_positions(&self) -> js_sys::Float32Array {
+        match &self.sim3d {
+            Some(s) => js_sys::Float32Array::from(s.pin_positions().as_slice()),
+            None => js_sys::Float32Array::new_with_length(0),
+        }
+    }
+
+    pub fn get_sim3d_vbd_gpu_meta_json(&self) -> String {
+        match &self.sim3d {
+            Some(s) => serde_json::to_string(&s.vbd_gpu_meta()).unwrap_or_else(|_| "null".into()),
+            None => "null".into(),
+        }
+    }
+
+    pub fn get_sim3d_vbd_gpu_u32(&self, kind: &str) -> js_sys::Uint32Array {
+        match &self.sim3d {
+            Some(s) => js_sys::Uint32Array::from(s.vbd_gpu_u32(kind).as_slice()),
+            None => js_sys::Uint32Array::new_with_length(0),
+        }
+    }
+
+    pub fn get_sim3d_vbd_gpu_f32(&self, kind: &str) -> js_sys::Float32Array {
+        match &self.sim3d {
+            Some(s) => js_sys::Float32Array::from(s.vbd_gpu_f32(kind).as_slice()),
+            None => js_sys::Float32Array::new_with_length(0),
+        }
     }
 
     pub fn step_sim3d(&mut self, steps: u32) -> String {
@@ -1391,35 +1527,42 @@ impl ModelistSession {
 
     pub fn get_sim3d_cloth_positions(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.flat_positions.as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_positions()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
 
     pub fn get_sim3d_cloth_normals(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.flat_normals.as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_normals()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
 
     pub fn get_sim3d_cloth_strain(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.flat_strain_pct.as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_strain()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
 
     pub fn get_sim3d_cloth_tension(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.flat_tension_kpa.as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_tension()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
 
     pub fn get_sim3d_cloth_clearance(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.flat_clearance_mm.as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_clearance()),
+            None => js_sys::Float32Array::new_with_length(0),
+        }
+    }
+
+    pub fn get_sim3d_cloth_seam_mask(&self) -> js_sys::Float32Array {
+        match &self.sim3d {
+            Some(s) => js_sys::Float32Array::from(s.render_seam_mask()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
@@ -1427,7 +1570,7 @@ impl ModelistSession {
     /// Per-vertex cloth colour (rgb 0..1) from each piece role's fabric.
     pub fn get_sim3d_cloth_colors(&self) -> js_sys::Float32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Float32Array::from(s.cloth_colors().as_slice()),
+            Some(s) => js_sys::Float32Array::from(s.render_colors()),
             None => js_sys::Float32Array::new_with_length(0),
         }
     }
@@ -1443,7 +1586,7 @@ impl ModelistSession {
 
     pub fn get_sim3d_cloth_indices(&self) -> js_sys::Uint32Array {
         match &self.sim3d {
-            Some(s) => js_sys::Uint32Array::from(s.triangle_indices()),
+            Some(s) => js_sys::Uint32Array::from(s.render_indices()),
             None => js_sys::Uint32Array::new_with_length(0),
         }
     }
@@ -1540,6 +1683,8 @@ impl ModelistSession {
                             modelist_core::model::CurveSegment::Cubic { .. }
                         ),
                         is_fold: p.mirror_fold_edge == Some(ei),
+                        hem: e.hem,
+                        elastic: e.elastic,
                     })
                     .collect();
                 let darts = p

@@ -643,7 +643,9 @@ fn reconstruct_bezier_edges(pts: &[Point2], turn_pts: &[Point2], piece_idx: usiz
                 sa_width_mm: 10.0,
                 corner_rule: CornerRule::Miter { limit: 2.5 },
                 label: format!("Edge {}", edges.len() + 1),
-            });
+                hem: None,
+                elastic: None,
+});
         } else {
             let segs = fit_cubic_schneider(&span, 0.35);
             let mut cursor = span[0];
@@ -656,7 +658,9 @@ fn reconstruct_bezier_edges(pts: &[Point2], turn_pts: &[Point2], piece_idx: usiz
                     sa_width_mm: 10.0,
                     corner_rule: CornerRule::Miter { limit: 2.5 },
                     label: format!("Edge {}", edges.len() + 1),
-                });
+                    hem: None,
+                    elastic: None,
+});
                 cursor = end;
             }
         }
@@ -1334,7 +1338,9 @@ pub fn import_garmentcode_json(
                 sa_width_mm: 10.0,
                 corner_rule: CornerRule::Miter { limit: 2.5 },
                 label: format!("Edge {}", ei + 1),
-            });
+                hem: None,
+                elastic: None,
+});
         }
 
         if poly_edges.len() < 3 {

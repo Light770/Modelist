@@ -187,6 +187,8 @@ pub fn split_edge_at_t(edge: &PolyEdge, t: f64) -> (PolyEdge, PolyEdge) {
                 sa_width_mm: edge.sa_width_mm,
                 corner_rule: edge.corner_rule,
                 label: edge.label.clone(),
+                hem: edge.hem,
+                elastic: edge.elastic,
             };
             let e2 = PolyEdge {
                 id: crate::model::det_id(&format!("{}:split_b", edge.id)),
@@ -195,6 +197,8 @@ pub fn split_edge_at_t(edge: &PolyEdge, t: f64) -> (PolyEdge, PolyEdge) {
                 sa_width_mm: edge.sa_width_mm,
                 corner_rule: edge.corner_rule,
                 label: edge.label.clone(),
+                hem: edge.hem,
+                elastic: edge.elastic,
             };
             (e1, e2)
         }
@@ -213,6 +217,8 @@ pub fn split_edge_at_t(edge: &PolyEdge, t: f64) -> (PolyEdge, PolyEdge) {
                 sa_width_mm: edge.sa_width_mm,
                 corner_rule: edge.corner_rule,
                 label: edge.label.clone(),
+                hem: edge.hem,
+                elastic: edge.elastic,
             };
             let e2 = PolyEdge {
                 id: crate::model::det_id(&format!("{}:split_b", edge.id)),
@@ -225,6 +231,8 @@ pub fn split_edge_at_t(edge: &PolyEdge, t: f64) -> (PolyEdge, PolyEdge) {
                 sa_width_mm: edge.sa_width_mm,
                 corner_rule: edge.corner_rule,
                 label: edge.label.clone(),
+                hem: edge.hem,
+                elastic: edge.elastic,
             };
             (e1, e2)
         }

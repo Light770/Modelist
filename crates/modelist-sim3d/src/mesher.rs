@@ -6,6 +6,7 @@
 //! Delaunay triangulation. The mesh carries everything the solver needs: per-triangle grainline
 //! directions for anisotropy, bending hinges, and seam/dart vertex memberships for sewing.
 
+use crate::sizing_map::SizingMap;
 use modelist_core::curve::{
     edge_arc_length_to, edge_total_length, eval_edge_point, invert_edge_arc_length,
 };
@@ -60,6 +61,8 @@ pub struct PanelMesh {
     pub fold_line: Option<(Point2, Point2)>,
     pub total_area_mm2: f64,
     pub min_angle_deg: f64,
+    pub min_edge_mm: f64,
+    pub max_edge_mm: f64,
     /// Darts cut out of this panel (their legs are sewn shut by the solver).
     pub darts_closed: usize,
     /// Sewn length of each meshed edge (total length minus closed dart caps), mm.
@@ -181,13 +184,34 @@ fn dart_cuts_for_edge(
     kept
 }
 
+/// Effective sewn length of `piece.seam_loop.edges[edge_idx]` in mm (total length minus valid dart caps).
+pub(crate) fn edge_sewn_length_mm(piece: &PatternPiece, edge_idx: usize) -> f64 {
+    let Some(edge) = piece.seam_loop.edges.get(edge_idx) else {
+        return 0.0;
+    };
+    let len = edge_total_length(edge);
+    if piece.darts.is_empty() {
+        return len.max(1e-6);
+    }
+    let plain = build_boundary(piece, false, 1, 20.0, None, None, None).samples;
+    let plain_poly: Vec<Point2> = dedup_boundary(plain).iter().map(|b| b.pt).collect();
+    if plain_poly.len() < 3 {
+        return len.max(1e-6);
+    }
+    let cuts = dart_cuts_for_edge(piece, edge_idx, edge, Some(&plain_poly));
+    let cap_total: f64 = cuts.iter().map(|c| c.s_b - c.s_a).sum();
+    (len - cap_total).max(1e-6)
+}
+
 /// Samples one edge from its start (inclusive) to its end (exclusive), inserting dart wedges.
 fn push_edge_samples(
     out: &mut Vec<BoundarySample>,
     edge: &PolyEdge,
     side: i8,
     spacing: f64,
+    sizing: Option<&SizingMap>,
     cuts: &[DartCut],
+    stations: Option<&[f64]>,
 ) -> (usize, f64) {
     let is_waist = edge.label.to_lowercase().contains("waist");
     let len = edge_total_length(edge).max(1e-9);
@@ -217,22 +241,65 @@ fn push_edge_samples(
     segments.push((s0, len, None));
 
     let mut closed = 0usize;
+    let mut cum_eff = 0.0_f64;
     for (si, (s_lo, s_hi, dart)) in segments.into_iter().enumerate() {
-        let steps = (((s_hi - s_lo) / spacing).ceil() as usize).clamp(1, 64);
-        for k in 0..steps {
-            if k == 0 && si > 0 {
-                continue; // the segment start was emitted as the previous dart's second leg point
+        let seg_eff = (s_hi - s_lo).max(0.0);
+        if let Some(st) = stations.filter(|s| s.len() >= 2) {
+            if si == 0 {
+                out.push(on_edge(s_lo));
             }
-            out.push(on_edge(s_lo + (s_hi - s_lo) * (k as f64) / (steps as f64)));
+            for &u in st {
+                if u <= 1e-5 || u >= 1.0 - 1e-5 {
+                    continue;
+                }
+                let s_eff = u * len_eff;
+                if s_eff > cum_eff && s_eff < cum_eff + seg_eff {
+                    let s = s_lo + (s_eff - cum_eff);
+                    if s - s_lo >= 1.55 && s_hi - s >= 1.55 {
+                        out.push(on_edge(s));
+                    }
+                }
+            }
+        } else if let Some(smap) = sizing {
+            let mut s = s_lo;
+            let mut count = 0usize;
+            while s < s_hi - 1e-3 && count < 96 {
+                let sample = on_edge(s);
+                let ds = smap.eval_mm(sample.pt).clamp(4.0, 30.0);
+                if !(count == 0 && si > 0) {
+                    out.push(sample);
+                }
+                count += 1;
+                if s + ds >= s_hi - 0.35 * ds {
+                    break;
+                }
+                s += ds;
+            }
+            if count == 0 && si == 0 {
+                out.push(on_edge(s_lo));
+            }
+        } else {
+            let steps = (((s_hi - s_lo) / spacing).ceil() as usize).clamp(1, 64);
+            for k in 0..steps {
+                if k == 0 && si > 0 {
+                    continue; // the segment start was emitted as the previous dart's second leg point
+                }
+                out.push(on_edge(s_lo + (s_hi - s_lo) * (k as f64) / (steps as f64)));
+            }
         }
+        cum_eff += seg_eff;
         if let Some(c) = dart {
             let mut a = on_edge(c.s_a);
             a.pt = c.pa;
             a.dart_marks.push((c.id, 0, 0.0, side));
             out.push(a);
-            let n_a = ((c.apex.dist(c.pa) / spacing).ceil() as usize).clamp(1, 32);
-            for k in 1..n_a {
-                let f = k as f64 / n_a as f64;
+            let leg_ds_a = sizing.map(|m| m.eval_mm(c.pa)).unwrap_or(spacing).clamp(4.0, 30.0);
+            let leg_ds_b = sizing.map(|m| m.eval_mm(c.pb)).unwrap_or(spacing).clamp(4.0, 30.0);
+            let n_a = ((c.apex.dist(c.pa) / leg_ds_a).ceil() as usize).clamp(1, 32);
+            let n_b = ((c.apex.dist(c.pb) / leg_ds_b).ceil() as usize).clamp(1, 32);
+            let n_leg = n_a.max(n_b);
+            for k in 1..n_leg {
+                let f = k as f64 / n_leg as f64;
                 let mut b = BoundarySample::new(lerp_pt(c.pa, c.apex, f), false);
                 b.dart_marks.push((c.id, 0, f, side));
                 out.push(b);
@@ -241,9 +308,8 @@ fn push_edge_samples(
             apex.dart_marks.push((c.id, 0, 1.0, side));
             apex.dart_marks.push((c.id, 1, 1.0, side));
             out.push(apex);
-            let n_b = ((c.apex.dist(c.pb) / spacing).ceil() as usize).clamp(1, 32);
-            for k in (1..n_b).rev() {
-                let f = k as f64 / n_b as f64;
+            for k in (1..n_leg).rev() {
+                let f = k as f64 / n_leg as f64;
                 let mut b = BoundarySample::new(lerp_pt(c.pb, c.apex, f), false);
                 b.dart_marks.push((c.id, 1, f, side));
                 out.push(b);
@@ -264,7 +330,9 @@ fn build_boundary(
     unfold: bool,
     base_side: i8,
     spacing: f64,
+    sizing: Option<&SizingMap>,
     inside_poly: Option<&[Point2]>,
+    edge_stations: Option<&HashMap<Uuid, Vec<f64>>>,
 ) -> Boundary {
     let edges = &piece.seam_loop.edges;
     let n_edges = edges.len();
@@ -280,7 +348,8 @@ fn build_boundary(
             let edge = &edges[ei];
             let first = samples.len();
             let cuts = dart_cuts_for_edge(piece, ei, edge, inside_poly);
-            let (closed, sewn) = push_edge_samples(&mut samples, edge, 1, spacing, &cuts);
+            let st = edge_stations.and_then(|m| m.get(&edge.id)).map(|v| v.as_slice());
+            let (closed, sewn) = push_edge_samples(&mut samples, edge, 1, spacing, sizing, &cuts, st);
             darts += closed;
             sewn_lens.push((edge.id, sewn));
             if offset > 0 {
@@ -341,7 +410,8 @@ fn build_boundary(
         for (ei, edge) in edges.iter().enumerate() {
             starts.push(samples.len());
             let cuts = dart_cuts_for_edge(piece, ei, edge, inside_poly);
-            let (closed, sewn) = push_edge_samples(&mut samples, edge, base_side, spacing, &cuts);
+            let st = edge_stations.and_then(|m| m.get(&edge.id)).map(|v| v.as_slice());
+            let (closed, sewn) = push_edge_samples(&mut samples, edge, base_side, spacing, sizing, &cuts, st);
             darts += closed;
             sewn_lens.push((edge.id, sewn));
         }
@@ -392,7 +462,58 @@ pub fn mesh_pattern_piece(
     unfold_mirror_fold: bool,
     target_spacing_mm: f64,
 ) -> Option<PanelMesh> {
-    let spacing = target_spacing_mm.clamp(8.0, 35.0);
+    let spacing = target_spacing_mm.clamp(6.0, 35.0);
+    mesh_pattern_piece_inner(piece, mirror_x, unfold_mirror_fold, spacing, None, None)
+}
+
+/// Discretizes a piece using a physics-inspired non-uniform [`SizingMap`] and variable-radius
+/// Bridson Poisson disk sampling, falling back to uniform meshing if needed.
+pub fn mesh_pattern_piece_adaptive(
+    piece: &PatternPiece,
+    mirror_x: bool,
+    unfold_mirror_fold: bool,
+    sizing: &SizingMap,
+) -> Option<PanelMesh> {
+    mesh_pattern_piece_inner(piece, mirror_x, unfold_mirror_fold, sizing.r_base_mm, Some(sizing), None)
+        .or_else(|| mesh_pattern_piece(piece, mirror_x, unfold_mirror_fold, sizing.r_base_mm))
+}
+
+/// Discretizes a piece with optional pre-matched conformal seam edge stations.
+pub(crate) fn mesh_pattern_piece_with_stations(
+    piece: &PatternPiece,
+    mirror_x: bool,
+    unfold_mirror_fold: bool,
+    spacing_mm: f64,
+    sizing: Option<&SizingMap>,
+    edge_stations: Option<&HashMap<Uuid, Vec<f64>>>,
+) -> Option<PanelMesh> {
+    let base_spacing = sizing.map(|s| s.r_base_mm).unwrap_or(spacing_mm).clamp(6.0, 35.0);
+    mesh_pattern_piece_inner(
+        piece,
+        mirror_x,
+        unfold_mirror_fold,
+        base_spacing,
+        sizing,
+        edge_stations,
+    )
+    .or_else(|| {
+        if edge_stations.is_some() {
+            mesh_pattern_piece_inner(piece, mirror_x, unfold_mirror_fold, base_spacing, sizing, None)
+        } else {
+            None
+        }
+    })
+    .or_else(|| mesh_pattern_piece(piece, mirror_x, unfold_mirror_fold, base_spacing))
+}
+
+fn mesh_pattern_piece_inner(
+    piece: &PatternPiece,
+    mirror_x: bool,
+    unfold_mirror_fold: bool,
+    spacing: f64,
+    sizing: Option<&SizingMap>,
+    edge_stations: Option<&HashMap<Uuid, Vec<f64>>>,
+) -> Option<PanelMesh> {
     if piece.seam_loop.edges.len() < 3 {
         return None;
     }
@@ -400,18 +521,36 @@ pub fn mesh_pattern_piece(
     let unfold = unfold_mirror_fold && piece.mirror_fold_edge.is_some();
 
     // Pass 1 without darts gives the outline used to validate dart apexes.
-    let plain = build_boundary(piece, unfold, base_side, spacing, None).samples;
+    let plain = build_boundary(piece, unfold, base_side, spacing, sizing, None, edge_stations).samples;
     let plain_poly: Vec<Point2> = dedup_boundary(plain).iter().map(|b| b.pt).collect();
     if plain_poly.len() < 3 {
         return None;
     }
     let with_darts = !piece.darts.is_empty();
     if with_darts {
-        if let Some(m) = triangulate(piece, mirror_x, unfold, base_side, spacing, Some(&plain_poly)) {
+        if let Some(m) = triangulate(
+            piece,
+            mirror_x,
+            unfold,
+            base_side,
+            spacing,
+            sizing,
+            Some(&plain_poly),
+            edge_stations,
+        ) {
             return Some(m);
         }
     }
-    triangulate(piece, mirror_x, unfold, base_side, spacing, None)
+    triangulate(
+        piece,
+        mirror_x,
+        unfold,
+        base_side,
+        spacing,
+        sizing,
+        None,
+        edge_stations,
+    )
 }
 
 fn triangulate(
@@ -420,14 +559,16 @@ fn triangulate(
     unfold: bool,
     base_side: i8,
     spacing: f64,
+    sizing: Option<&SizingMap>,
     dart_poly: Option<&[Point2]>,
+    edge_stations: Option<&HashMap<Uuid, Vec<f64>>>,
 ) -> Option<PanelMesh> {
     let Boundary {
         mut samples,
         darts: darts_closed,
         fold_line,
         sewn_lens: edge_sewn_len_mm,
-    } = build_boundary(piece, unfold, base_side, spacing, dart_poly);
+    } = build_boundary(piece, unfold, base_side, spacing, sizing, dart_poly, edge_stations);
 
     // Mirror X for the right-hand copy of a cut-2 pair (keeps the loop CCW).
     let mut grain = piece.grainline.end.sub(piece.grainline.start);
@@ -472,24 +613,37 @@ fn triangulate(
         }
     }
 
-    // Interior hex-staggered Steiner points, clear of the boundary.
+    // Interior Steiner points: variable-radius Bridson Poisson sampling when a SizingMap
+    // is provided, or uniform hex-staggered grid otherwise.
     let (min_x, min_y, max_x, max_y) = bbox(&poly);
-    let dy = spacing * 0.866;
-    let margin = spacing * 0.62;
-    let mut row = 0usize;
-    let mut y = min_y + margin;
-    while y < max_y - margin {
-        let x_off = if row % 2 == 1 { spacing * 0.5 } else { 0.0 };
-        let mut x = min_x + margin + x_off;
-        while x < max_x - margin {
-            let pt = Point2::new(x, y);
-            if point_in_poly(pt, &poly) && dist_to_poly_boundary(pt, &poly) >= margin {
-                let _ = cdt.insert(SpadePt::new(x, y));
-            }
-            x += spacing;
+    if let Some(smap) = sizing {
+        let mut interior_map = if mirror_x {
+            smap.mirrored_x(piece.grainline.start.x)
+        } else {
+            smap.clone()
+        };
+        if let Some((fa, fd)) = fold_line {
+            interior_map = interior_map.with_fold_reflection(fa, fd);
         }
-        y += dy;
-        row += 1;
+        sample_interior_poisson(&poly, &interior_map, piece.id.as_u128(), &mut cdt);
+    } else {
+        let dy = spacing * 0.866;
+        let margin = spacing * 0.62;
+        let mut row = 0usize;
+        let mut y = min_y + margin;
+        while y < max_y - margin {
+            let x_off = if row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+            let mut x = min_x + margin + x_off;
+            while x < max_x - margin {
+                let pt = Point2::new(x, y);
+                if point_in_poly(pt, &poly) && dist_to_poly_boundary(pt, &poly) >= margin {
+                    let _ = cdt.insert(SpadePt::new(x, y));
+                }
+                x += spacing;
+            }
+            y += dy;
+            row += 1;
+        }
     }
 
     let mut handle_to_idx: HashMap<spade::handles::FixedVertexHandle, usize> = HashMap::new();
@@ -526,6 +680,8 @@ fn triangulate(
     let mut tri_grain: Vec<Point2> = Vec::new();
     let mut total_area_mm2 = 0.0_f64;
     let mut min_angle_deg = 180.0_f64;
+    let mut min_edge_mm = f64::INFINITY;
+    let mut max_edge_mm = 0.0_f64;
     for face in cdt.inner_faces() {
         let vs = face.vertices();
         let p0 = Point2::new(vs[0].position().x, vs[0].position().y);
@@ -541,6 +697,11 @@ fn triangulate(
         }
         total_area_mm2 += area;
         min_angle_deg = min_angle_deg.min(triangle_min_angle_deg(p0, p1, p2));
+        for (ea, eb) in [(p0, p1), (p1, p2), (p2, p0)] {
+            let el = ea.dist(eb);
+            min_edge_mm = min_edge_mm.min(el);
+            max_edge_mm = max_edge_mm.max(el);
+        }
         triangles.push([
             handle_to_idx[&vs[0].fix()],
             handle_to_idx[&vs[1].fix()],
@@ -617,9 +778,115 @@ fn triangulate(
         fold_line,
         total_area_mm2,
         min_angle_deg,
+        min_edge_mm: if min_edge_mm.is_finite() { min_edge_mm } else { spacing },
+        max_edge_mm,
         darts_closed,
         edge_sewn_len_mm,
     })
+}
+
+/// Variable-radius Bridson Poisson disk sampling guided by `smap` (deterministic per `seed`).
+fn sample_interior_poisson(
+    poly: &[Point2],
+    smap: &SizingMap,
+    seed: u128,
+    cdt: &mut ConstrainedDelaunayTriangulation<SpadePt<f64>>,
+) {
+    let (min_x, min_y, max_x, max_y) = bbox(poly);
+    let cell = (0.85 * smap.r_min_mm / std::f64::consts::SQRT_2).max(2.0);
+    let gw = (((max_x - min_x) / cell).ceil() as usize + 2).min(1024);
+    let gh = (((max_y - min_y) / cell).ceil() as usize + 2).min(1024);
+    let mut grid = vec![-1_i32; gw * gh];
+    let cell_of = |p: Point2| -> (usize, usize) {
+        let cx = (((p.x - min_x) / cell).floor() as isize).clamp(0, gw as isize - 1) as usize;
+        let cy = (((p.y - min_y) / cell).floor() as isize).clamp(0, gh as isize - 1) as usize;
+        (cx, cy)
+    };
+
+    let mut pts: Vec<(Point2, f64)> = Vec::with_capacity(poly.len() * 4);
+    let mut active: Vec<usize> = Vec::with_capacity(poly.len() * 2);
+    for &bp in poly {
+        let r = smap.eval_mm(bp);
+        let idx = pts.len();
+        pts.push((bp, r));
+        active.push(idx);
+        let (cx, cy) = cell_of(bp);
+        if grid[cy * gw + cx] < 0 {
+            grid[cy * gw + cx] = idx as i32;
+        }
+    }
+
+    let g = smap.grain.normalized();
+    let gp = Point2::new(-g.y, g.x);
+    let sx = smap.aniso.sqrt();
+    let sy = 1.0 / sx.max(1e-6);
+    let mut rng = ((seed as u64) ^ ((seed >> 64) as u64) ^ 0x9e37_79b9_7f4a_7c15).max(1);
+    let mut next_u01 = || -> f64 {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        (rng >> 11) as f64 * (1.0 / ((1u64 << 53) as f64))
+    };
+
+    let max_pts = 8000usize;
+    while !active.is_empty() && pts.len() < max_pts {
+        let a_idx = (next_u01() * active.len() as f64) as usize;
+        let p_idx = active[a_idx.min(active.len() - 1)];
+        let (p, rp) = pts[p_idx];
+        let mut found = false;
+
+        for _ in 0..20 {
+            let ang = next_u01() * std::f64::consts::TAU;
+            let rad = rp * (1.0 + 0.85 * next_u01());
+            let du = rad * ang.cos() * sx;
+            let dv = rad * ang.sin() * sy;
+            let q = p.add(gp.scale(du)).add(g.scale(dv));
+            if q.x <= min_x || q.x >= max_x || q.y <= min_y || q.y >= max_y {
+                continue;
+            }
+            if !point_in_poly(q, poly) {
+                continue;
+            }
+            let rq = smap.eval_mm(q);
+            if dist_to_poly_boundary(q, poly) < 0.55 * rq {
+                continue;
+            }
+            let (qcx, qcy) = cell_of(q);
+            let search_r = ((rq / cell).ceil() as isize).clamp(2, 5);
+            let x0 = (qcx as isize - search_r).max(0) as usize;
+            let x1 = (qcx as isize + search_r).min(gw as isize - 1) as usize;
+            let y0 = (qcy as isize - search_r).max(0) as usize;
+            let y1 = (qcy as isize + search_r).min(gh as isize - 1) as usize;
+            let mut ok = true;
+            'check: for ny in y0..=y1 {
+                for nx in x0..=x1 {
+                    let gi = grid[ny * gw + nx];
+                    if gi >= 0 {
+                        let (nb, r_nb) = pts[gi as usize];
+                        let min_d = 0.85 * rq.min(r_nb);
+                        if q.dist(nb) < min_d {
+                            ok = false;
+                            break 'check;
+                        }
+                    }
+                }
+            }
+            if ok {
+                let n_idx = pts.len();
+                pts.push((q, rq));
+                active.push(n_idx);
+                if grid[qcy * gw + qcx] < 0 {
+                    grid[qcy * gw + qcx] = n_idx as i32;
+                }
+                let _ = cdt.insert(SpadePt::new(q.x, q.y));
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            active.swap_remove(a_idx.min(active.len() - 1));
+        }
+    }
 }
 
 #[inline]

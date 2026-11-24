@@ -4,7 +4,7 @@ export type ThemeMode = 'paper' | 'dark';
 
 export type WorkspaceMode = '2d' | 'split' | '3d';
 
-export type Camera3DPreset = 'front' | 'back' | 'left' | 'right' | 'three_quarter';
+export type Camera3DPreset = 'front' | 'back' | 'left' | 'right' | 'three_quarter' | 'top' | 'bottom';
 
 export type ToolId =
   | 'select'
@@ -152,6 +152,18 @@ export interface MeasurementItem {
   max_mm: number;
 }
 
+export interface HemSpec {
+  depth_mm: number;
+  fold_count: number;
+  turn_out?: boolean;
+}
+
+export interface ElasticBandSpec {
+  target_ratio: number;
+  width_mm: number;
+  stiffness_n_m: number;
+}
+
 export interface EdgeInfo {
   edge_idx: number;
   edge_id: string;
@@ -161,6 +173,8 @@ export interface EdgeInfo {
   corner_rule: CornerRule;
   is_cubic: boolean;
   is_fold: boolean;
+  hem?: HemSpec | null;
+  elastic?: ElasticBandSpec | null;
 }
 
 export interface DartInfo {
@@ -452,6 +466,14 @@ export interface Sim3dStats {
   measured_height_mm: number;
   darts_closed: number;
   motion_mm_s: number;
+  solver_mode: string;
+  mesh_spacing_mm: number;
+  adaptive_mesh: boolean;
+  min_edge_mm: number;
+  max_edge_mm: number;
+  pin_count: number;
+  self_collision_enabled: boolean;
+  wind_speed_mps: number;
 }
 
 export function formatMm(mm: number, unit: DisplayUnit, decimals = 1): string {

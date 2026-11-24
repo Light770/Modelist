@@ -37,7 +37,9 @@ mod tests {
                 sa_width_mm: sa,
                 corner_rule: rule,
                 label: "Bottom".into(),
-            },
+                hem: None,
+                elastic: None,
+},
             PolyEdge {
                 id: det_id("sq:1"),
                 start: p1,
@@ -45,7 +47,9 @@ mod tests {
                 sa_width_mm: sa,
                 corner_rule: rule,
                 label: "Right".into(),
-            },
+                hem: None,
+                elastic: None,
+},
             PolyEdge {
                 id: det_id("sq:2"),
                 start: p2,
@@ -53,7 +57,9 @@ mod tests {
                 sa_width_mm: sa,
                 corner_rule: rule,
                 label: "Top".into(),
-            },
+                hem: None,
+                elastic: None,
+},
             PolyEdge {
                 id: det_id("sq:3"),
                 start: p3,
@@ -61,7 +67,9 @@ mod tests {
                 sa_width_mm: sa,
                 corner_rule: rule,
                 label: "Left".into(),
-            },
+                hem: None,
+                elastic: None,
+},
         ];
         PatternPiece {
             id: det_id("sq:piece"),
@@ -506,7 +514,9 @@ mod tests {
                 sa_width_mm: 10.0,
                 corner_rule: CornerRule::Miter { limit: 2.5 },
                 label: "Prop".into(),
-            };
+                hem: None,
+                elastic: None,
+};
             let total = edge_total_length(&edge);
             let s_target = total * frac;
             let t = invert_edge_arc_length(&edge, s_target);

@@ -26,6 +26,8 @@ pub(crate) fn rect_piece(w: f64, h: f64, grain_deg: f64) -> PatternPiece {
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Square,
             label: format!("Edge {i}"),
+            hem: None,
+            elastic: None,
         })
         .collect();
     let a = grain_deg.to_radians();

@@ -183,6 +183,24 @@ pub fn apply_ops_to_piece(piece: &mut PatternPiece, ops: &[ParametricOp]) {
             ParametricOp::MirrorPiece { piece_id, .. } if *piece_id == piece.id => {
                 apply_mirror_piece(piece);
             }
+            ParametricOp::SetEdgeFinish {
+                piece_id,
+                edge_idx,
+                hem,
+                elastic,
+                ..
+            } if *piece_id == piece.id => {
+                if let Some(edge) = piece.seam_loop.edges.get_mut(*edge_idx) {
+                    edge.hem = *hem;
+                    edge.elastic = *elastic;
+                    if let Some(h) = hem {
+                        edge.corner_rule = CornerRule::FoldedHem;
+                        if edge.sa_width_mm < h.depth_mm {
+                            edge.sa_width_mm = h.depth_mm;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -346,7 +364,9 @@ pub fn make_rect_pattern_piece(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Bottom Edge".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: det_id(&format!("{pid}:e1")),
             start: p1,
@@ -354,7 +374,9 @@ pub fn make_rect_pattern_piece(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Right Edge".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: det_id(&format!("{pid}:e2")),
             start: p2,
@@ -362,7 +384,9 @@ pub fn make_rect_pattern_piece(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Top Edge".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: det_id(&format!("{pid}:e3")),
             start: p3,
@@ -370,7 +394,9 @@ pub fn make_rect_pattern_piece(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Left Edge".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
     let mut seam_loop = ClosedPolyCurve::from_edges(edges);
     seam_loop.ensure_ccw();
@@ -591,7 +617,9 @@ pub fn apply_style_line_split(
         sa_width_mm: 10.0,
         corner_rule: CornerRule::Miter { limit: 2.5 },
         label: "Style Seam".into(),
-    });
+        hem: None,
+        elastic: None,
+});
     let mut loop_a = ClosedPolyCurve::from_edges(edges_a);
     loop_a.sync_continuity();
     loop_a.ensure_ccw();
@@ -612,7 +640,9 @@ pub fn apply_style_line_split(
         sa_width_mm: 10.0,
         corner_rule: CornerRule::Miter { limit: 2.5 },
         label: "Style Seam".into(),
-    });
+        hem: None,
+        elastic: None,
+});
     let mut loop_b = ClosedPolyCurve::from_edges(edges_b);
     loop_b.sync_continuity();
     loop_b.ensure_ccw();

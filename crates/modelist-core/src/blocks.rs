@@ -268,7 +268,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Waist Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fb_e_side,
             start: fb_p1,
@@ -276,7 +278,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Side Seam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fb_e_arm,
             start: fb_p2,
@@ -288,7 +292,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Armscye".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fb_e_sh,
             start: fb_p3,
@@ -296,7 +302,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Shoulder".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fb_e_neck,
             start: fb_p4,
@@ -308,7 +316,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 6.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Neckline".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fb_e_cf,
             start: fb_p5,
@@ -316,7 +326,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 0.0,
             corner_rule: CornerRule::Square,
             label: "Center Front (Fold)".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
 
     let mut fb_loop = ClosedPolyCurve::from_edges(fb_edges);
@@ -425,7 +437,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Waist Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bb_e_side,
             start: bb_p1,
@@ -433,7 +447,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Side Seam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bb_e_arm,
             start: bb_p2,
@@ -445,7 +461,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Armscye".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bb_e_sh,
             start: bb_p3,
@@ -453,7 +471,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Shoulder".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bb_e_neck,
             start: bb_p4,
@@ -465,7 +485,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 6.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Neckline".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bb_e_cb,
             start: bb_p5,
@@ -473,7 +495,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Square,
             label: "Center Back (Zip)".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
 
     let mut bb_loop = ClosedPolyCurve::from_edges(bb_edges);
@@ -567,7 +591,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 30.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Sleeve Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: sl_e_bu,
             start: sl_p1,
@@ -575,7 +601,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Underarm".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: sl_e_bc,
             start: sl_p2,
@@ -587,7 +615,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Sleeve Cap".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: sl_e_fc,
             start: sl_p3,
@@ -599,7 +629,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Sleeve Cap".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: sl_e_fu,
             start: sl_p4,
@@ -607,7 +639,9 @@ fn build_bodice_and_sleeve(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Underarm".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
 
     let mut sl_loop = ClosedPolyCurve::from_edges(sl_edges);
@@ -807,7 +841,9 @@ fn build_aline_skirt(
             sa_width_mm: 30.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Front Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fs_e_side,
             start: Point2::new(f_hem_w, 8.0),
@@ -819,7 +855,9 @@ fn build_aline_skirt(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Side Seam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fs_e_waist,
             start: Point2::new(f_waist_w, len + 10.0),
@@ -831,7 +869,9 @@ fn build_aline_skirt(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Waist".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: fs_e_cf,
             start: Point2::new(0.0, len),
@@ -841,7 +881,9 @@ fn build_aline_skirt(
             sa_width_mm: 0.0,
             corner_rule: CornerRule::Square,
             label: "Center Front (Fold)".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
     let mut fs_loop = ClosedPolyCurve::from_edges(fs_edges);
     fs_loop.ensure_ccw();
@@ -917,7 +959,9 @@ fn build_aline_skirt(
             sa_width_mm: 30.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Back Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bs_e_side,
             start: Point2::new(x_bs + b_hem_w, 8.0),
@@ -929,7 +973,9 @@ fn build_aline_skirt(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Side Seam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bs_e_waist,
             start: Point2::new(x_bs + b_waist_w, len + 10.0),
@@ -941,7 +987,9 @@ fn build_aline_skirt(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Waist".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bs_e_cb,
             start: Point2::new(x_bs, len),
@@ -951,7 +999,9 @@ fn build_aline_skirt(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Square,
             label: "Center Back (Zip)".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
     let mut bs_loop = ClosedPolyCurve::from_edges(bs_edges);
     bs_loop.ensure_ccw();
@@ -1100,7 +1150,9 @@ fn build_trouser_block(
             sa_width_mm: 30.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Front Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: ft_e_in,
             start: ft_p1,
@@ -1112,7 +1164,9 @@ fn build_trouser_block(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Inseam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: ft_e_crotch,
             start: ft_p2,
@@ -1124,7 +1178,9 @@ fn build_trouser_block(
             sa_width_mm: 12.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Crotch J-Curve".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: ft_e_waist,
             start: ft_p3,
@@ -1136,7 +1192,9 @@ fn build_trouser_block(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Waist".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: ft_e_out,
             start: ft_p4,
@@ -1148,7 +1206,9 @@ fn build_trouser_block(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Front Outseam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
 
     let mut ft_loop = ClosedPolyCurve::from_edges(ft_edges);
@@ -1262,7 +1322,9 @@ fn build_trouser_block(
             sa_width_mm: 30.0,
             corner_rule: CornerRule::FoldedHem,
             label: "Back Hem".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bt_e_in,
             start: bt_p1,
@@ -1274,7 +1336,9 @@ fn build_trouser_block(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Inseam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bt_e_crotch,
             start: bt_p2,
@@ -1286,7 +1350,9 @@ fn build_trouser_block(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Seat Seam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bt_e_waist,
             start: bt_p3,
@@ -1294,7 +1360,9 @@ fn build_trouser_block(
             sa_width_mm: 10.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Waist".into(),
-        },
+            hem: None,
+            elastic: None,
+},
         PolyEdge {
             id: bt_e_out,
             start: bt_p4,
@@ -1306,7 +1374,9 @@ fn build_trouser_block(
             sa_width_mm: 15.0,
             corner_rule: CornerRule::Miter { limit: 2.5 },
             label: "Back Outseam".into(),
-        },
+            hem: None,
+            elastic: None,
+},
     ];
 
     let mut bt_loop = ClosedPolyCurve::from_edges(bt_edges);

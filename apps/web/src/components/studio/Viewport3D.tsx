@@ -1,6 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Grid3x3, Pause, PersonStanding, Play, RotateCcw, Ruler } from 'lucide-react';
+import { Focus, Grid3x3, Hand, Layers, Pause, PersonStanding, Play, RotateCcw, Ruler, Wind, X } from 'lucide-react';
 import { getSim3dVersion, kernel } from '../../lib/kernelClient';
+import { WebGpuVbdEngine } from '../../lib/sim3d/webgpuVbd';
+import {
+  CAMERA_FOV_RAD,
+  type OrbitCamera3D,
+  applyFreeMove,
+  applyOrbitDelta,
+  applyPanDelta,
+  applyZoomFactor,
+  cameraBasis,
+  cameraClipPlanes,
+  makeViewMatrix,
+  unprojectCameraRay,
+} from '../../lib/sim3d/camera3d';
 import { useT, type MessageKey } from '../../lib/i18n';
 import type { Camera3DPreset, FabricFinish, Sim3dStats } from '../../lib/types';
 
@@ -14,6 +27,7 @@ const FINISH_CODE: Record<FabricFinish, number> = {
   terry: 6,
 };
 import { useStudioStore } from '../../store/studioStore';
+import { wheelZoomFactor } from '../../lib/cad/zoom';
 
 const VS_SRC = `#version 300 es
 precision highp float;
@@ -21,18 +35,21 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_norm;
 layout(location = 2) in float a_metric;
 layout(location = 3) in vec3 a_color;
+layout(location = 4) in float a_seam;
 
 uniform mat4 u_mvp;
 out vec3 v_norm;
 out vec3 v_pos;
 out float v_metric;
 out vec3 v_color;
+out float v_seam;
 
 void main() {
   v_norm = a_norm;
   v_pos = a_pos;
   v_metric = a_metric;
   v_color = a_color;
+  v_seam = a_seam;
   gl_Position = u_mvp * vec4(a_pos, 1.0);
 }
 `;
@@ -43,6 +60,7 @@ in vec3 v_norm;
 in vec3 v_pos;
 in float v_metric;
 in vec3 v_color;
+in float v_seam;
 
 uniform int u_mode; // 0=avatar, 1=cloth_material, 2=strain, 3=tension, 4=clearance, 5=xray, 6=floor
 uniform int u_finish; // 0 plain, 1 twill, 2 satin, 3 jersey, 4 rib, 5 sheer, 6 terry
@@ -69,7 +87,7 @@ void main() {
   // Studio Floor Plane with Architectural 20cm Grid + Soft Radial Contact Shadow
   if (u_mode == 6) {
     float r = length(v_pos.xz);
-    float fade = 1.0 - smoothstep(0.65, 2.2, r);
+    float fade = 1.0 - smoothstep(2.0, 7.5, r);
     if (fade < 0.01) discard;
 
     vec2 g = abs(fract(v_pos.xz * 5.0 - 0.5) - 0.5) / max(fwidth(v_pos.xz * 5.0), vec2(0.001));
@@ -154,6 +172,19 @@ void main() {
       tex = 0.97 + 0.03 * sin(v_pos.x * 260.0 + v_pos.y * 180.0) * cos(v_pos.y * 260.0 - v_pos.z * 180.0);
     }
     vec3 fabricCol = base * tex;
+    if (v_seam > 0.25) {
+      // Pressed seamline groove shading + subtle hem-fold & interior serge hint
+      float groove = smoothstep(0.25, 1.0, v_seam) * 0.08;
+      fabricCol *= (1.0 - groove);
+      if (!backFace && v_seam > 2.5 && v_seam < 3.5) {
+        fabricCol *= 0.93;
+      } else if (backFace && v_seam > 1.5 && v_seam < 2.5) {
+        // Surjettage (overlock serging) loops on interior back-faces
+        float loopWave = abs(sin((v_pos.x - v_pos.y + v_pos.z) * 320.0));
+        vec3 sergeCol = mix(base * 1.12, vec3(0.86, 0.88, 0.92), 0.35);
+        fabricCol = mix(fabricCol, sergeCol, smoothstep(0.65, 0.96, loopWave) * 0.22);
+      }
+    }
     if (backFace) {
       fabricCol *= vec3(0.74, 0.72, 0.70); // darker inside, like CLO3D
     }
@@ -226,38 +257,6 @@ function makePerspective(fovRad: number, aspect: number, near: number, far: numb
  * Right-handed OpenGL LookAt matrix with world up = (0, +1, 0).
  * Camera looks along -fz, with right = normalize(up x fz) and trueUp = fz x right.
  */
-function makeLookAt(eye: [number, number, number], target: [number, number, number]): Float32Array {
-  const zx = eye[0] - target[0];
-  const zy = eye[1] - target[1];
-  const zz = eye[2] - target[2];
-  const zl = Math.hypot(zx, zy, zz) || 1;
-  const fz = [zx / zl, zy / zl, zz / zl];
-
-  // up = (0, 1, 0) -> up x fz = (1*fz[2] - 0*fz[1], 0*fz[0] - 0*fz[2], 0*fz[1] - 1*fz[0]) = (fz[2], 0, -fz[0])
-  const rx = fz[2];
-  const ry = 0;
-  const rz = -fz[0];
-  const rl = Math.hypot(rx, ry, rz) || 1;
-  const fx = [rx / rl, ry / rl, rz / rl];
-
-  // camUp = fz x fx
-  const fy = [
-    fz[1] * fx[2] - fz[2] * fx[1],
-    fz[2] * fx[0] - fz[0] * fx[2],
-    fz[0] * fx[1] - fz[1] * fx[0],
-  ];
-
-  return new Float32Array([
-    fx[0], fy[0], fz[0], 0,
-    fx[1], fy[1], fz[1], 0,
-    fx[2], fy[2], fz[2], 0,
-    -(fx[0] * eye[0] + fx[1] * eye[1] + fx[2] * eye[2]),
-    -(fy[0] * eye[0] + fy[1] * eye[1] + fy[2] * eye[2]),
-    -(fz[0] * eye[0] + fz[1] * eye[1] + fz[2] * eye[2]),
-    1,
-  ]);
-}
-
 function mulMat4(a: Float32Array, b: Float32Array): Float32Array {
   const out = new Float32Array(16);
   for (let c = 0; c < 4; c++) {
@@ -273,7 +272,12 @@ function mulMat4(a: Float32Array, b: Float32Array): Float32Array {
 }
 
 function defaultFramingForTemplate(templateId?: string) {
-  if (templateId === 'trouser_block') {
+  if (
+    templateId === 'trouser_block' ||
+    templateId === 'wide_pleat_trouser' ||
+    templateId === 'barrel_trouser' ||
+    templateId === 'jogger_pants'
+  ) {
     return { targetY: 0.62, dist: 1.92 };
   }
   if (templateId === 'aline_skirt') {
@@ -286,15 +290,28 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const snapshot = useStudioStore((s) => s.snapshot);
   const initialFrame = defaultFramingForTemplate(snapshot?.template_id);
-  const orbitRef = useRef({
+  const orbitRef = useRef<OrbitCamera3D>({
     yaw: 0.36,
     pitch: 0.08,
     dist: initialFrame.dist,
+    targetX: 0,
     targetY: initialFrame.targetY,
-    dragging: false,
+    targetZ: 0,
+  });
+  const navRef = useRef<{
+    mode: 'none' | 'orbit' | 'pan';
+    yawSign: number;
+    lx: number;
+    ly: number;
+    pointers: Map<number, { x: number; y: number }>;
+  }>({
+    mode: 'none',
+    yawSign: 1,
     lx: 0,
     ly: 0,
+    pointers: new Map(),
   });
+  const keysRef = useRef<Set<string>>(new Set());
   const playingRef = useRef(true);
   const lastVerRef = useRef(-1);
 
@@ -319,10 +336,22 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
 
   const statsRef = useRef<Sim3dStats | null>(null);
   const [glError, setGlError] = useState<string | null>(null);
+  const [grabMode, setGrabMode] = useState(false);
+  const [meshSpacing, setMeshSpacing] = useState(0);
+  const [selfCollide, setSelfCollide] = useState(true);
+  const [windOn, setWindOn] = useState(false);
+  const [pinCount, setPinCount] = useState(0);
+  const [webgpuActive, setWebgpuActive] = useState(false);
+  const grabRef = useRef<{
+    planePoint: [number, number, number];
+    planeNormal: [number, number, number];
+  } | null>(null);
+  const webgpuRef = useRef<WebGpuVbdEngine | null>(null);
   const t = useT();
 
   const publishStats = (next: Sim3dStats | null) => {
     statsRef.current = next;
+    setPinCount(next?.pin_count ?? 0);
     setSim3dTelemetry(next);
   };
 
@@ -330,33 +359,59 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     playingRef.current = playing;
   }, [playing]);
 
+  const initWebGpuEngine = () => {
+    webgpuRef.current?.dispose();
+    webgpuRef.current = null;
+    const meta = kernel.getSim3dVbdGpuMeta();
+    if (!meta) return;
+    void WebGpuVbdEngine.create(
+      kernel.getSim3dVbdGpuU32('color_verts'),
+      kernel.getSim3dVbdGpuU32('vert_tri_offsets'),
+      kernel.getSim3dVbdGpuU32('vert_tri_entries'),
+      kernel.getSim3dVbdGpuU32('tri_verts'),
+      kernel.getSim3dVbdGpuF32('tri_cuv'),
+      kernel.getSim3dVbdGpuF32('inv_mass'),
+    ).then((eng) => {
+      if (eng) {
+        webgpuRef.current = eng;
+        setWebgpuActive(true);
+      }
+    });
+  };
+
   // Strict lifecycle: initialize 3D engine on mount, dispose on unmount!
   useEffect(() => {
-    publishStats(kernel.initSim3d(pose, bodyForm));
+    publishStats(kernel.initSim3d(pose, bodyForm, meshSpacing, selfCollide));
+    initWebGpuEngine();
     return () => {
+      webgpuRef.current?.dispose();
+      webgpuRef.current = null;
       kernel.disposeSim3d();
       useStudioStore.getState().setSim3dTelemetry(null, null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pose, body form and the toolbar's "re-drape" re-arrange the garment (skipped on mount,
-  // where the init above already did it).
+  // Pose, body form, mesh spacing and "re-drape" re-arrange the garment (skipped on mount).
   const arrangedRef = useRef(false);
   useEffect(() => {
     if (!arrangedRef.current) {
       arrangedRef.current = true;
       return;
     }
-    publishStats(kernel.resetSim3d(pose, bodyForm));
+    publishStats(kernel.resetSim3d(pose, bodyForm, meshSpacing, selfCollide));
+    if (windOn) kernel.setSim3dWind(1.8, 0.0, 0.6);
+    initWebGpuEngine();
     lastVerRef.current = -1;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pose, bodyForm, resetSeq]);
+  }, [pose, bodyForm, meshSpacing, resetSeq]);
 
   // Auto-frame camera smoothly when template changes
   useEffect(() => {
     const fr = defaultFramingForTemplate(snapshot?.template_id);
+    orbitRef.current.targetX = 0;
     orbitRef.current.targetY = fr.targetY;
+    orbitRef.current.targetZ = 0;
     orbitRef.current.dist = fr.dist;
   }, [snapshot?.template_id]);
 
@@ -364,7 +419,9 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   useEffect(() => {
     const fr = defaultFramingForTemplate(useStudioStore.getState().snapshot?.template_id);
     const orb = orbitRef.current;
+    orb.targetX = 0;
     orb.targetY = fr.targetY;
+    orb.targetZ = 0;
     orb.dist = fr.dist;
     if (cameraPreset === 'front') {
       orb.yaw = 0;
@@ -378,6 +435,12 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     } else if (cameraPreset === 'right') {
       orb.yaw = -Math.PI * 0.5;
       orb.pitch = 0.05;
+    } else if (cameraPreset === 'top') {
+      orb.yaw = 0;
+      orb.pitch = Math.PI * 0.5;
+    } else if (cameraPreset === 'bottom') {
+      orb.yaw = 0;
+      orb.pitch = -Math.PI * 0.5;
     } else {
       orb.yaw = 0.36;
       orb.pitch = 0.08;
@@ -425,7 +488,7 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     const fPosBuf = gl.createBuffer()!;
     const fNormBuf = gl.createBuffer()!;
     const fIdxBuf = gl.createBuffer()!;
-    const floorSize = 2.4;
+    const floorSize = 8.0;
     const floorPos = new Float32Array([
       -floorSize, 0, -floorSize,
       floorSize, 0, -floorSize,
@@ -460,12 +523,14 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     const cNormBuf = gl.createBuffer()!;
     const cMetricBuf = gl.createBuffer()!;
     const cColorBuf = gl.createBuffer()!;
+    const cSeamBuf = gl.createBuffer()!;
     const cIdxBuf = gl.createBuffer()!;
 
     let avatarIdxCount = 0;
     let clothIdxCount = 0;
     let rafId = 0;
     let frameTick = 0;
+    let lastTickMs = performance.now();
 
     // Avatar and cloth topology change only with the sim version; positions change every frame.
     const uploadAll = (full: boolean) => {
@@ -522,15 +587,46 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         gl.bufferData(gl.ARRAY_BUFFER, b.clothColor, gl.STATIC_DRAW);
         gl.enableVertexAttribArray(3);
         gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, cSeamBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, b.clothSeamMask, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 1, gl.FLOAT, false, 0, 0);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cIdxBuf);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.clothIdx, gl.STATIC_DRAW);
       }
       gl.bindVertexArray(null);
     };
 
-    const tick = () => {
+    const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
+      const dtSec = Math.min(0.05, Math.max(0.001, (now - lastTickMs) * 0.001));
+      lastTickMs = now;
       frameTick += 1;
+
+      const held = keysRef.current;
+      if (held.size > 0) {
+        const forward =
+          (held.has('KeyW') || held.has('ArrowUp') ? 1 : 0) -
+          (held.has('KeyS') || held.has('ArrowDown') ? 1 : 0);
+        const right =
+          (held.has('KeyD') || held.has('ArrowRight') ? 1 : 0) -
+          (held.has('KeyA') || held.has('ArrowLeft') ? 1 : 0);
+        const up =
+          (held.has('KeyE') || held.has('PageUp') ? 1 : 0) -
+          (held.has('KeyQ') || held.has('PageDown') ? 1 : 0);
+        if (forward !== 0 || right !== 0 || up !== 0) {
+          applyFreeMove(
+            orbitRef.current,
+            {
+              forward,
+              right,
+              up,
+              sprint: held.has('ShiftLeft') || held.has('ShiftRight'),
+            },
+            dtSec,
+          );
+        }
+      }
 
       const ver = getSim3dVersion();
       if (ver !== lastVerRef.current) {
@@ -569,14 +665,10 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       gl.enable(gl.DEPTH_TEST);
 
       const orb = orbitRef.current;
-      const cp = Math.cos(orb.pitch);
-      const eye: [number, number, number] = [
-        orb.dist * cp * Math.sin(orb.yaw),
-        orb.targetY + orb.dist * Math.sin(orb.pitch),
-        orb.dist * cp * Math.cos(orb.yaw),
-      ];
-      const proj = makePerspective(0.62, w / h, 0.05, 18.0);
-      const view = makeLookAt(eye, [0, orb.targetY, 0]);
+      const { eye } = cameraBasis(orb);
+      const { near, far } = cameraClipPlanes(orb.dist);
+      const proj = makePerspective(CAMERA_FOV_RAD, w / h, near, far);
+      const view = makeViewMatrix(orb);
       const mvp = mulMat4(proj, view);
 
       gl.useProgram(prog);
@@ -660,6 +752,7 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       gl.deleteBuffer(cNormBuf);
       gl.deleteBuffer(cMetricBuf);
       gl.deleteBuffer(cColorBuf);
+      gl.deleteBuffer(cSeamBuf);
       gl.deleteBuffer(cIdxBuf);
       gl.deleteVertexArray(avatarVao);
       gl.deleteVertexArray(clothVao);
@@ -667,9 +760,71 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     };
   }, []);
 
+  const zoomStepSeq = useStudioStore((s) => s.zoomStepSeq);
+  const fitViewSeq = useStudioStore((s) => s.fitViewSeq);
+  const workspaceMode = useStudioStore((s) => s.workspaceMode);
+
   useEffect(() => {
     lastVerRef.current = -1;
   }, [viewMode]);
+
+  useEffect(() => {
+    if (zoomStepSeq === 0 || workspaceMode !== '3d') return;
+    const factor = useStudioStore.getState().zoomStepFactor;
+    applyZoomFactor(orbitRef.current, factor);
+  }, [zoomStepSeq, workspaceMode]);
+
+  useEffect(() => {
+    if (fitViewSeq === 0 || workspaceMode !== '3d') return;
+    const fr = defaultFramingForTemplate(useStudioStore.getState().snapshot?.template_id);
+    const orb = orbitRef.current;
+    orb.targetX = 0;
+    orb.targetY = fr.targetY;
+    orb.targetZ = 0;
+    orb.dist = fr.dist;
+  }, [fitViewSeq, workspaceMode]);
+
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null) =>
+      el instanceof HTMLInputElement ||
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLSelectElement ||
+      (el instanceof HTMLElement && el.isContentEditable);
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditable(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const mode = useStudioStore.getState().workspaceMode;
+      if (mode !== '3d' && document.activeElement !== canvasRef.current) return;
+      keysRef.current.add(e.code);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      keysRef.current.delete(e.code);
+    };
+    const onBlur = () => {
+      keysRef.current.clear();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const factor = wheelZoomFactor(e);
+      applyZoomFactor(orbitRef.current, factor);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [glError]);
 
   const showLegend = viewMode === 'strain' || viewMode === 'tension' || viewMode === 'clearance';
 
@@ -690,42 +845,154 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       ) : (
         <canvas
           ref={canvasRef}
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
-            orbitRef.current.dragging = true;
-            orbitRef.current.lx = e.clientX;
-            orbitRef.current.ly = e.clientY;
-          }}
-          onPointerMove={(e) => {
-            if (!orbitRef.current.dragging) return;
-            const dx = e.clientX - orbitRef.current.lx;
-            const dy = e.clientY - orbitRef.current.ly;
-            orbitRef.current.lx = e.clientX;
-            orbitRef.current.ly = e.clientY;
-            if (e.shiftKey || e.buttons === 4) {
-              orbitRef.current.targetY = Math.max(
-                0.25,
-                Math.min(1.55, orbitRef.current.targetY + dy * 0.0028),
-              );
+          tabIndex={0}
+          data-viewport3d="true"
+          onContextMenu={(e) => e.preventDefault()}
+          onDoubleClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const ray = unprojectCameraRay(e.clientX, e.clientY, rect, orbitRef.current);
+            const hit = kernel.pickSim3dVertex(
+              ray.origin[0],
+              ray.origin[1],
+              ray.origin[2],
+              ray.dir[0],
+              ray.dir[1],
+              ray.dir[2],
+            );
+            const orb = orbitRef.current;
+            if (hit) {
+              orb.targetX = hit.pos[0];
+              orb.targetY = hit.pos[1];
+              orb.targetZ = hit.pos[2];
+              orb.dist = Math.min(orb.dist, 0.85);
             } else {
-              orbitRef.current.yaw -= dx * 0.0085;
-              orbitRef.current.pitch = Math.max(
-                -0.75,
-                Math.min(1.05, orbitRef.current.pitch + dy * 0.0075),
-              );
+              const fr = defaultFramingForTemplate(useStudioStore.getState().snapshot?.template_id);
+              orb.targetX = 0;
+              orb.targetY = fr.targetY;
+              orb.targetZ = 0;
+              orb.dist = fr.dist;
             }
           }}
-          onPointerUp={() => {
-            orbitRef.current.dragging = false;
+          onPointerDown={(e) => {
+            e.currentTarget.focus({ preventScroll: true });
+            e.currentTarget.setPointerCapture(e.pointerId);
+            navRef.current.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (navRef.current.pointers.size >= 2) {
+              if (grabRef.current) {
+                grabRef.current = null;
+                kernel.grabSim3dEnd();
+              }
+              navRef.current.mode = 'none';
+              return;
+            }
+            if ((grabMode || e.altKey) && e.button === 0) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ray = unprojectCameraRay(e.clientX, e.clientY, rect, orbitRef.current);
+              const hit = kernel.pickSim3dVertex(
+                ray.origin[0],
+                ray.origin[1],
+                ray.origin[2],
+                ray.dir[0],
+                ray.dir[1],
+                ray.dir[2],
+              );
+              if (hit) {
+                if (e.shiftKey) {
+                  kernel.toggleSim3dPin(hit.vert);
+                  const st = kernel.stepSim3d(1);
+                  if (st) publishStats(st);
+                  return;
+                }
+                kernel.grabSim3dStart(hit.vert, hit.pos[0], hit.pos[1], hit.pos[2], 0.14);
+                grabRef.current = {
+                  planePoint: hit.pos,
+                  planeNormal: ray.fwd,
+                };
+                if (!playingRef.current) setPlaying(true);
+                return;
+              }
+            }
+            const isPan = e.button === 2 || e.button === 1 || e.shiftKey;
+            navRef.current.mode = isPan ? 'pan' : 'orbit';
+            navRef.current.yawSign = Math.cos(orbitRef.current.pitch) >= 0 ? 1 : -1;
+            navRef.current.lx = e.clientX;
+            navRef.current.ly = e.clientY;
           }}
-          onWheel={(e) => {
-            e.preventDefault();
-            orbitRef.current.dist = Math.max(
-              0.72,
-              Math.min(3.8, orbitRef.current.dist * (e.deltaY > 0 ? 1.08 : 0.92)),
-            );
+          onPointerMove={(e) => {
+            const ptrs = navRef.current.pointers;
+            const prevPtr = ptrs.get(e.pointerId);
+            if (ptrs.size === 2 && prevPtr) {
+              const pts = Array.from(ptrs.entries());
+              const other = pts[0][0] === e.pointerId ? pts[1][1] : pts[0][1];
+              const prevMidX = 0.5 * (prevPtr.x + other.x);
+              const prevMidY = 0.5 * (prevPtr.y + other.y);
+              const prevDist = Math.hypot(prevPtr.x - other.x, prevPtr.y - other.y);
+              ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+              const nextMidX = 0.5 * (e.clientX + other.x);
+              const nextMidY = 0.5 * (e.clientY + other.y);
+              const nextDist = Math.hypot(e.clientX - other.x, e.clientY - other.y);
+              const rect = e.currentTarget.getBoundingClientRect();
+              applyPanDelta(orbitRef.current, nextMidX - prevMidX, nextMidY - prevMidY, rect.height);
+              if (prevDist > 8 && nextDist > 8) {
+                applyZoomFactor(orbitRef.current, nextDist / prevDist);
+              }
+              return;
+            }
+            if (prevPtr) {
+              ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            }
+            if (grabRef.current) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ray = unprojectCameraRay(e.clientX, e.clientY, rect, orbitRef.current);
+              const { planePoint: pp, planeNormal: pn } = grabRef.current;
+              const denom = ray.dir[0] * pn[0] + ray.dir[1] * pn[1] + ray.dir[2] * pn[2];
+              if (Math.abs(denom) > 1e-4) {
+                const tHit =
+                  ((pp[0] - ray.origin[0]) * pn[0] +
+                    (pp[1] - ray.origin[1]) * pn[1] +
+                    (pp[2] - ray.origin[2]) * pn[2]) /
+                  denom;
+                if (tHit > 0.05 && tHit < 10) {
+                  kernel.grabSim3dMove(
+                    ray.origin[0] + ray.dir[0] * tHit,
+                    ray.origin[1] + ray.dir[1] * tHit,
+                    ray.origin[2] + ray.dir[2] * tHit,
+                  );
+                }
+              }
+              return;
+            }
+            if (navRef.current.mode === 'none') return;
+            const dx = e.clientX - navRef.current.lx;
+            const dy = e.clientY - navRef.current.ly;
+            navRef.current.lx = e.clientX;
+            navRef.current.ly = e.clientY;
+            if (navRef.current.mode === 'pan') {
+              const rect = e.currentTarget.getBoundingClientRect();
+              applyPanDelta(orbitRef.current, dx, dy, rect.height);
+            } else {
+              applyOrbitDelta(orbitRef.current, dx, dy, navRef.current.yawSign);
+            }
           }}
-          className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
+          onPointerUp={(e) => {
+            navRef.current.pointers.delete(e.pointerId);
+            if (grabRef.current) {
+              grabRef.current = null;
+              kernel.grabSim3dEnd();
+            }
+            navRef.current.mode = 'none';
+          }}
+          onPointerCancel={(e) => {
+            navRef.current.pointers.delete(e.pointerId);
+            if (grabRef.current) {
+              grabRef.current = null;
+              kernel.grabSim3dEnd();
+            }
+            navRef.current.mode = 'none';
+          }}
+          className={`w-full h-full block touch-none outline-none ${
+            grabMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+          }`}
         />
       )}
 
@@ -756,6 +1023,32 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         </div>
       )}
 
+      {/* Solver & Mesh Resolution HUD (top-right) */}
+      <div className="floating-panel absolute top-2 right-2 z-10 h-[26px] px-2 flex items-center gap-2 text-[10px] font-mono-num">
+        <span style={{ color: webgpuActive ? '#0e9f6e' : 'var(--text-secondary)' }}>
+          {webgpuActive ? 'VBD · WebGPU' : 'XPBD+VBD · WASM'}
+        </span>
+        {statsRef.current?.adaptive_mesh && statsRef.current.max_edge_mm > 0 && (
+          <span style={{ color: 'var(--text-muted)' }}>
+            {statsRef.current.min_edge_mm.toFixed(0)}–{statsRef.current.max_edge_mm.toFixed(0)} mm
+          </span>
+        )}
+        <select
+          value={meshSpacing}
+          onChange={(e) => setMeshSpacing(Number(e.target.value))}
+          title={t('v3d.meshSpacingTitle')}
+          aria-label={t('v3d.meshSpacingTitle')}
+          className="bg-transparent text-[10px] cursor-pointer outline-none"
+          style={{ color: 'var(--text-primary)' }}
+        >
+          <option value={0}>{t('v3d.meshAuto')}</option>
+          <option value={20}>{t('v3d.mesh20')}</option>
+          <option value={14}>{t('v3d.mesh14')}</option>
+          <option value={10}>{t('v3d.mesh10')}</option>
+          <option value={7}>{t('v3d.mesh7')}</option>
+        </select>
+      </div>
+
       {/* Navigation bar (bottom centre): camera views, scene toggles, simulation */}
       <div
         className="floating-panel absolute bottom-2 left-1/2 -translate-x-1/2 z-10 h-[30px] px-1 flex items-center gap-0.5 text-[11px] whitespace-nowrap"
@@ -768,6 +1061,8 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
             ['three_quarter', 'v3d.threeQuarter'],
             ['left', 'v3d.side'],
             ['back', 'v3d.back'],
+            ['top', 'v3d.top'],
+            ['bottom', 'v3d.bottom'],
           ] as Array<[Camera3DPreset, MessageKey]>
         ).map(([p, lbl]) => (
           <button
@@ -780,6 +1075,24 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
             {t(lbl)}
           </button>
         ))}
+        <button
+          onClick={() => {
+            const fr = defaultFramingForTemplate(useStudioStore.getState().snapshot?.template_id);
+            const orb = orbitRef.current;
+            orb.targetX = 0;
+            orb.targetY = fr.targetY;
+            orb.targetZ = 0;
+            orb.dist = fr.dist;
+            orb.yaw = 0.36;
+            orb.pitch = 0.08;
+          }}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={{ color: 'var(--text-secondary)' }}
+          title={t('v3d.reframe')}
+          aria-label={t('v3d.reframe')}
+        >
+          <Focus className="w-3.5 h-3.5" />
+        </button>
         <div className="w-px h-4 mx-1" style={{ background: 'var(--border-subtle)' }} />
         <button
           onClick={toggle3dAvatar}
@@ -828,6 +1141,64 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
+        <div className="w-px h-4 mx-1" style={{ background: 'var(--border-subtle)' }} />
+        <button
+          onClick={() => setGrabMode(!grabMode)}
+          aria-pressed={grabMode}
+          className="h-[24px] px-1.5 flex items-center gap-1 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(grabMode)}
+          title={t('v3d.grabModeTitle')}
+        >
+          <Hand className="w-3.5 h-3.5" />
+          {t('v3d.grabMode')}
+        </button>
+        {pinCount > 0 && (
+          <button
+            onClick={() => {
+              kernel.clearSim3dPins();
+              setPinCount(0);
+            }}
+            className="h-[24px] px-1.5 flex items-center gap-1 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)] text-rose-500"
+            title={t('v3d.clearPins', { count: pinCount })}
+          >
+            <X className="w-3 h-3" />
+            {pinCount}
+          </button>
+        )}
+        <button
+          onClick={() => {
+            const next = !selfCollide;
+            setSelfCollide(next);
+            kernel.setSim3dSelfCollision(next);
+          }}
+          aria-pressed={selfCollide}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(selfCollide)}
+          title={t('v3d.selfCollideTitle')}
+        >
+          <Layers className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => {
+            const next = !windOn;
+            setWindOn(next);
+            kernel.setSim3dWind(next ? 1.8 : 0.0, 0.0, next ? 0.6 : 0.0);
+          }}
+          aria-pressed={windOn}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(windOn)}
+          title={t('v3d.windTitle')}
+        >
+          <Wind className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Subtle navigation hint (bottom-right, desktop) */}
+      <div
+        className="pointer-events-none hidden xl:block absolute bottom-2 right-2 z-10 px-2 py-0.5 rounded text-[10px]"
+        style={{ color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--bg-panel) 72%, transparent)' }}
+      >
+        {t('v3d.navHint')}
       </div>
     </div>
   );
