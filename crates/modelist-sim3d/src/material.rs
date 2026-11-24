@@ -7,11 +7,32 @@
 use modelist_core::model::{fabric_role_is_interfaced, fabric_role_key, FabricSpec, PatternProject};
 
 /// Fabrics available to one simulation: the shell plus optional per-role overrides.
+///
+/// Several garments can share a simulation: pieces of garment `n > 0` carry roles written
+/// `g{n}|{role}` (see [`garment_role`]), resolved against that garment's own fabrics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialSet {
     pub shell: FabricSpec,
-    /// `(role_key, fabric)` pairs; keys come from [`fabric_role_key`].
+    /// `(role_key, fabric)` pairs; keys come from [`fabric_role_key`], prefixed `g{n}|` for the
+    /// fabrics of garment `n > 0` (whose shell is `g{n}|shell`).
     pub roles: Vec<(String, FabricSpec)>,
+}
+
+/// Role of a piece of garment `garment` in a shared simulation.
+pub fn garment_role(garment: usize, role: &str) -> String {
+    if garment == 0 {
+        role.to_string()
+    } else {
+        format!("g{garment}|{role}")
+    }
+}
+
+/// Splits `g{n}|role` into the garment prefix (`"g{n}|"`, or empty) and the role.
+fn split_garment(role: &str) -> (&str, &str) {
+    match role.find('|') {
+        Some(i) if role.starts_with('g') => (&role[..=i], &role[i + 1..]),
+        _ => ("", role),
+    }
 }
 
 impl MaterialSet {
@@ -22,21 +43,36 @@ impl MaterialSet {
         }
     }
 
+    /// The fabrics of every garment of the project (garment `n` = component `n`).
     pub fn from_project(project: &PatternProject) -> Self {
+        let mut roles = Vec::new();
+        for (ci, comp) in project.components.iter().enumerate() {
+            if ci > 0 {
+                roles.push((format!("g{ci}|shell"), comp.fabric.clone().normalized()));
+            }
+            for rf in &comp.role_fabrics {
+                let key = fabric_role_key(&rf.role);
+                let key = if ci == 0 { key } else { format!("g{ci}|{key}") };
+                roles.push((key, rf.fabric.clone().normalized()));
+            }
+        }
         Self {
-            shell: project.fabric.clone().normalized(),
-            roles: project
-                .role_fabrics
-                .iter()
-                .map(|rf| (fabric_role_key(&rf.role), rf.fabric.clone().normalized()))
-                .collect(),
+            shell: project.components[0].fabric.clone().normalized(),
+            roles,
         }
     }
 
     pub fn fabric_for_role(&self, role: &str) -> &FabricSpec {
-        let key = fabric_role_key(role);
+        let (prefix, bare) = split_garment(role);
+        let key = format!("{prefix}{}", fabric_role_key(bare));
         if key != "shell" {
             if let Some((_, f)) = self.roles.iter().find(|(k, _)| *k == key) {
+                return f;
+            }
+        }
+        if !prefix.is_empty() {
+            let shell = format!("{prefix}shell");
+            if let Some((_, f)) = self.roles.iter().find(|(k, _)| *k == shell) {
                 return f;
             }
         }
@@ -45,7 +81,8 @@ impl MaterialSet {
 
     /// Solver material for a piece role (applies the interfacing modifier when needed).
     pub(crate) fn solver_material(&self, role: &str) -> SolverMaterial {
-        SolverMaterial::from_spec(self.fabric_for_role(role), fabric_role_is_interfaced(role))
+        let (_, bare) = split_garment(role);
+        SolverMaterial::from_spec(self.fabric_for_role(role), fabric_role_is_interfaced(bare))
     }
 }
 
@@ -143,5 +180,12 @@ mod tests {
         assert_eq!(set.fabric_for_role("Rib").id, "rib_knit");
         assert_eq!(set.fabric_for_role("Shell (interfaced)").id, "cotton_jersey_heavy");
         assert_eq!(set.fabric_for_role("Lining").id, "cotton_jersey_heavy");
+        // A second garment resolves against its own fabrics, then its own shell.
+        set.roles.push(("g1|shell".into(), FabricSpec::from_preset("denim_12oz")));
+        set.roles.push(("g1|rib".into(), FabricSpec::from_preset("jersey_knit")));
+        assert_eq!(set.fabric_for_role(&garment_role(1, "Rib")).id, "jersey_knit");
+        assert_eq!(set.fabric_for_role(&garment_role(1, "Shell")).id, "denim_12oz");
+        assert_eq!(set.fabric_for_role(&garment_role(1, "Lining")).id, "denim_12oz");
+        assert_eq!(set.fabric_for_role(&garment_role(0, "Lining")).id, "cotton_jersey_heavy");
     }
 }

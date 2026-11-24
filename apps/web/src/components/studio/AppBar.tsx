@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { kernel } from '../../lib/kernelClient';
-import { getTemplateCatalog } from '../../lib/templateCatalog';
+import { templateMenuEntries } from './templateMenu';
 import {
   activateDocument,
   closeDocumentTab,
@@ -120,22 +120,7 @@ export const AppBar: React.FC = () => {
 
   if (!snapshot) return null;
 
-  const catalog = getTemplateCatalog();
-  const templateItems = (category: 'block' | 'style'): MenuEntry[] =>
-    catalog
-      .filter((tp) => tp.category === category)
-      .map((tp) => ({
-        id: `tpl-${tp.id}`,
-        label: ct('template', `${tp.id}.name`, tp.name),
-        title: ct('template', `${tp.id}.description`, tp.description),
-        onSelect: () => void newFromTemplate(tp.id),
-      }));
-  const templateEntries: MenuEntry[] = [
-    { kind: 'heading', id: 'h-blocks', label: t('topbar.blocks') },
-    ...templateItems('block'),
-    { kind: 'heading', id: 'h-styles', label: t('topbar.styles') },
-    ...templateItems('style'),
-  ];
+  const templateEntries = templateMenuEntries(t, ct, (id) => void newFromTemplate(id));
 
   const fileEntries: MenuEntry[] = [
     { id: 'new', label: t('appbar.newFromTemplate'), icon: FilePlus, submenu: templateEntries },

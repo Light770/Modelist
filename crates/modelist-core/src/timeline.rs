@@ -184,6 +184,7 @@ pub fn build_timeline_entries(
         .collect();
 
     project
+        .comp()
         .ops
         .iter()
         .enumerate()
@@ -191,7 +192,7 @@ pub fn build_timeline_entries(
             let id = op.id();
             let suppressed = project.is_op_suppressed(id);
             let after_rollback = i >= effective_rb;
-            let (reorder_min, reorder_max) = compute_reorder_range(&project.ops, i);
+            let (reorder_min, reorder_max) = compute_reorder_range(&project.comp().ops, i);
             let editable = !matches!(
                 op,
                 ParametricOp::DeleteSeamBinding { .. } | ParametricOp::MirrorPiece { .. }

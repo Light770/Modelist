@@ -92,6 +92,29 @@ pub fn build_template_pieces(
     HashMap<String, f64>,
     HashMap<String, String>,
 ) {
+    build_template_pieces_in(template_id, "", Point2::new(0.0, 0.0), measurements, ease, vars, ops, custom_pieces)
+}
+
+/// Drafts one garment. Drafted pieces (not `custom_pieces`, which are stored with their final
+/// IDs and positions) get their IDs moved into the namespace `id_ns` (empty = none) and are
+/// shifted by `offset` on the canvas, both before the ops replay, so ops recorded on the
+/// displayed pieces find them again.
+#[allow(clippy::too_many_arguments)]
+pub fn build_template_pieces_in(
+    template_id: &str,
+    id_ns: &str,
+    offset: Point2,
+    measurements: &BodyMeasurements,
+    ease: &EaseTable,
+    vars: &[ParametricVar],
+    ops: &[ParametricOp],
+    custom_pieces: &[PatternPiece],
+) -> (
+    Vec<PatternPiece>,
+    StitchingGraph,
+    HashMap<String, f64>,
+    HashMap<String, String>,
+) {
     let mut base_inputs = measurements.to_var_map();
     base_inputs.extend(ease.to_var_map());
     let dag = evaluate_dag(&base_inputs, vars, None);
@@ -105,6 +128,14 @@ pub fn build_template_pieces(
         (None, "trouser_block") => build_trouser_block(measurements, ease, vals),
         (None, _) => build_bodice_and_sleeve(measurements, ease, vals),
     };
+    if !id_ns.is_empty() {
+        crate::model::remap_entity_ids(&mut pieces, &mut stitching.bindings, id_ns);
+    }
+    if offset.x != 0.0 || offset.y != 0.0 {
+        for p in &mut pieces {
+            crate::model::translate_piece(p, offset.x, offset.y);
+        }
+    }
 
     for cp in custom_pieces {
         pieces.push(cp.clone());
@@ -1421,4 +1452,61 @@ fn build_trouser_block(
     };
 
     (vec![front_trouser, back_trouser], stitching)
+}
+
+/// Every garment of a project drafted on the same body.
+pub struct ProjectDraft {
+    pub pieces: Vec<PatternPiece>,
+    pub stitching: StitchingGraph,
+    /// Component index of each piece.
+    pub piece_component: Vec<usize>,
+    /// Formula values and errors per component.
+    pub var_values: Vec<HashMap<String, f64>>,
+    pub var_errors: Vec<HashMap<String, String>>,
+}
+
+/// Drafts one component on the given body.
+pub fn build_component_pieces(
+    comp: &crate::model::GarmentComponent,
+    measurements: &BodyMeasurements,
+) -> (Vec<PatternPiece>, StitchingGraph, HashMap<String, f64>, HashMap<String, String>) {
+    build_template_pieces_in(
+        &comp.template_id,
+        &comp.id_ns,
+        comp.offset_2d,
+        measurements,
+        &comp.ease,
+        &comp.variables,
+        &comp.active_ops(),
+        &comp.custom_pieces,
+    )
+}
+
+/// Drafts every component of the project on `measurements` (the project body, or a graded
+/// size) and merges them. Each component keeps its own pieces, seams and formulas.
+pub fn build_project_pieces(
+    project: &crate::model::PatternProject,
+    measurements: &BodyMeasurements,
+) -> ProjectDraft {
+    let mut out = ProjectDraft {
+        pieces: Vec::new(),
+        stitching: StitchingGraph::default(),
+        piece_component: Vec::new(),
+        var_values: Vec::new(),
+        var_errors: Vec::new(),
+    };
+    for (ci, comp) in project.components.iter().enumerate() {
+        let (mut pieces, stitching, vals, errs) = build_component_pieces(comp, measurements);
+        if !comp.visible {
+            for p in &mut pieces {
+                p.visible = false;
+            }
+        }
+        out.piece_component.extend(std::iter::repeat(ci).take(pieces.len()));
+        out.pieces.extend(pieces);
+        out.stitching.bindings.extend(stitching.bindings);
+        out.var_values.push(vals);
+        out.var_errors.push(errs);
+    }
+    out
 }

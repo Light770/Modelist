@@ -798,6 +798,12 @@ pub struct Sim3dStats {
     pub darts_closed: usize,
     /// Mean vertex speed over the last frame, mm/s (near 0 once the drape has settled).
     pub motion_mm_s: f32,
+    /// While garments are still being put on: the layer being dressed (1-based) and how many
+    /// layers there are. Both 0 once dressed.
+    #[serde(default)]
+    pub dressing_layer: usize,
+    #[serde(default)]
+    pub dressing_layers: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -806,6 +812,23 @@ struct Contact {
     n: Vec3,
     at: Vec3,
     dist: f32,
+}
+
+/// What is left to put on when garments are dressed one layer at a time.
+struct DressPlan {
+    pieces: Vec<PatternPiece>,
+    layers: Vec<u8>,
+    stitching: StitchingGraph,
+    measurements: BodyMeasurements,
+    materials: MaterialSet,
+    pose: AvatarPose,
+    body_form: AvatarBodyForm,
+    /// Distinct layers, inner first.
+    levels: Vec<u8>,
+    /// Index in `levels` of the layer being put on now.
+    stage: usize,
+    /// Inverse masses to restore when the stage ends (the lower layers are frozen meanwhile).
+    saved_inv_mass: Vec<f32>,
 }
 
 /// One-sided contact between a cloth vertex and a triangle of another garment layer.
@@ -855,6 +878,8 @@ pub struct ClothSimSession {
     motion_mm_s: f32,
     /// Garment layer of each vertex (0 = closest to the body).
     vert_layer: Vec<u8>,
+    /// Index (in the `pieces` the session was built from) of each vertex's piece.
+    vert_piece: Vec<u32>,
     /// Distinct layers present, ascending. More than one turns on layer contacts.
     layers: Vec<u8>,
     vert_thickness: Vec<f32>,
@@ -866,6 +891,8 @@ pub struct ClothSimSession {
     vert_room: Vec<f32>,
     /// Frames of gentle sewing before gravity and full seam strength come in.
     sew_frames: u32,
+    /// Set while garments are still being put on (see [`Self::start_dressing`]).
+    dress: Option<Box<DressPlan>>,
     pub flat_positions: Vec<f32>,
     pub flat_normals: Vec<f32>,
     pub flat_strain_pct: Vec<f32>,
@@ -930,6 +957,30 @@ impl ClothSimSession {
         pose: AvatarPose,
         body_form: AvatarBodyForm,
     ) -> Self {
+        let mut sim =
+            Self::start_dressing(pieces, layers, stitching, measurements, materials, pose, body_form);
+        if sim.dress.is_some() {
+            while sim.dress.is_some() {
+                sim.step(1);
+            }
+            sim.step(LAYER_COUPLE_FRAMES);
+        }
+        sim
+    }
+
+    /// Like [`Self::new_layered`], but returns as soon as the innermost layer has draped. The
+    /// other layers are then put on one after the other by the following [`Self::step`] calls
+    /// (the 3D view steps once per frame), so the page never freezes and the designer watches
+    /// the outfit being dressed. A single layer behaves exactly like `new_with_materials`.
+    pub fn start_dressing(
+        pieces: &[PatternPiece],
+        layers: &[u8],
+        stitching: &StitchingGraph,
+        measurements: &BodyMeasurements,
+        materials: &MaterialSet,
+        pose: AvatarPose,
+        body_form: AvatarBodyForm,
+    ) -> Self {
         let layer_of = |pi: usize| layers.get(pi).copied().unwrap_or(0);
         let mut levels: Vec<u8> = (0..pieces.len()).filter(|&i| pieces[i].visible).map(layer_of).collect();
         levels.sort_unstable();
@@ -939,42 +990,88 @@ impl ClothSimSession {
             sim.step(INIT_FRAMES);
             return sim;
         }
-        // Dress one layer at a time. Each pass rebuilds the scene with one more layer, keeps the
-        // layers under it exactly where they settled (their vertices come first, in the same
-        // order) and places the new layer around that settled cloth, not around where the inner
-        // garment started: a loose garment hangs away from the lower back and under the bust.
-        let mut settled: Vec<Vec3> = Vec::new();
-        for (li, &level) in levels.iter().enumerate() {
-            let keep: Vec<usize> = (0..pieces.len()).filter(|&i| layer_of(i) <= level).collect();
-            let sub_pieces: Vec<PatternPiece> = keep.iter().map(|&i| pieces[i].clone()).collect();
-            let sub_layers: Vec<u8> = keep.iter().map(|&i| layer_of(i)).collect();
-            let mut sim = Self::new_unsettled(
-                &sub_pieces, &sub_layers, &settled, stitching, measurements, materials, pose, body_form,
-            );
-            let saved = sim.core.inv_mass.clone();
-            for w in sim.core.inv_mass.iter_mut().take(settled.len()) {
-                *w = 0.0;
-            }
-            // Gentle sewing lasts until the new layer's seams meet (bounded), then it settles.
-            sim.sew_frames = SEW_FRAMES;
-            while sim.step_count < sim.sew_frames + SETTLE_FRAMES {
-                sim.step(1);
-                if sim.step_count + 1 == sim.sew_frames
-                    && sim.sew_frames < LAYER_MAX_SEW_FRAMES
-                    && sim.seam_gap_stats_mm().1 > LAYER_SEWN_GAP_MM
-                {
-                    sim.sew_frames += 5;
-                }
-            }
-            sim.core.inv_mass = saved;
-            if li + 1 == levels.len() {
-                sim.step(LAYER_COUPLE_FRAMES);
-                return sim;
-            }
-            settled = sim.core.pos.clone();
+        let plan = DressPlan {
+            pieces: pieces.to_vec(),
+            layers: (0..pieces.len()).map(layer_of).collect(),
+            stitching: stitching.clone(),
+            measurements: measurements.clone(),
+            materials: materials.clone(),
+            pose,
+            body_form,
+            levels,
+            stage: 0,
+            saved_inv_mass: Vec::new(),
+        };
+        let mut sim = Self::dress_stage(plan, 0, &[]);
+        while sim.dress.as_ref().map(|d| d.stage == 0).unwrap_or(false) {
+            sim.step(1);
         }
-        unreachable!()
+        sim
     }
+
+    /// Builds the scene for one dressing stage: every layer up to `levels[stage]`, the lower ones
+    /// kept frozen exactly where they `settled` (their vertices come first, in the same order),
+    /// the new one placed around that settled cloth. Wrapping around where the inner garment
+    /// started would be wrong: a loose garment hangs away from the lower back and under the bust.
+    fn dress_stage(mut plan: DressPlan, stage: usize, settled: &[Vec3]) -> Self {
+        let level = plan.levels[stage];
+        let keep: Vec<usize> = (0..plan.pieces.len()).filter(|&i| plan.layers[i] <= level).collect();
+        let sub_pieces: Vec<PatternPiece> = keep.iter().map(|&i| plan.pieces[i].clone()).collect();
+        let sub_layers: Vec<u8> = keep.iter().map(|&i| plan.layers[i]).collect();
+        let mut sim = Self::new_unsettled(
+            &sub_pieces,
+            &sub_layers,
+            settled,
+            &plan.stitching,
+            &plan.measurements,
+            &plan.materials,
+            plan.pose,
+            plan.body_form,
+        );
+        // Piece indices refer to this stage's subset: map them to the full outfit.
+        for vp in &mut sim.vert_piece {
+            *vp = keep[*vp as usize] as u32;
+        }
+        let saved = sim.core.inv_mass.clone();
+        for w in sim.core.inv_mass.iter_mut().take(settled.len()) {
+            *w = 0.0;
+        }
+        sim.sew_frames = SEW_FRAMES;
+        plan.stage = stage;
+        plan.saved_inv_mass = saved;
+        sim.dress = Some(Box::new(plan));
+        sim
+    }
+
+    /// Called after every frame while dressing: gentle sewing lasts until the new layer's seams
+    /// meet (bounded), then it settles; at the end of a stage the next layer is put on.
+    fn advance_dressing(&mut self) {
+        let Some(plan) = self.dress.as_ref() else { return };
+        if self.step_count + 1 == self.sew_frames
+            && self.sew_frames < LAYER_MAX_SEW_FRAMES
+            && self.seam_gap_stats_mm().1 > LAYER_SEWN_GAP_MM
+        {
+            self.sew_frames += 5;
+        }
+        if self.step_count < self.sew_frames + SETTLE_FRAMES {
+            return;
+        }
+        let last = plan.stage + 1 == plan.levels.len();
+        let mut plan = self.dress.take().expect("dressing plan");
+        self.core.inv_mass = std::mem::take(&mut plan.saved_inv_mass);
+        if last {
+            return;
+        }
+        let settled = self.core.pos.clone();
+        let next = plan.stage + 1;
+        *self = Self::dress_stage(*plan, next, &settled);
+    }
+
+    /// `(layer being put on, number of layers)` while the outfit is still being dressed.
+    pub fn dressing_progress(&self) -> Option<(usize, usize)> {
+        self.dress.as_ref().map(|d| (d.stage + 1, d.levels.len()))
+    }
+
 
     /// Builds the session with panels at their initial arrangement, before any simulation.
     #[doc(hidden)]
@@ -1047,6 +1144,7 @@ impl ClothSimSession {
         let mut order: Vec<usize> = (0..pieces.len()).collect();
         order.sort_by_key(|&pi| layer_of(pi));
         let mut vert_layer: Vec<u8> = Vec::new();
+        let mut vert_piece: Vec<u32> = Vec::new();
         let mut placed_zones: Vec<(ArrangementZone, usize, usize, u8)> = Vec::new();
         let mut shell = InnerShell { gap: LAYER_PLACE_GAP, ..Default::default() };
         let mut shell_layer: Option<u8> = None;
@@ -1099,6 +1197,7 @@ impl ClothSimSession {
                 };
                 positions.extend(placed);
                 vert_layer.resize(positions.len(), layer);
+                vert_piece.resize(positions.len(), pi as u32);
                 if positions.len() <= settled.len() {
                     // A lower layer that already draped: keep it where it settled.
                     let end = positions.len();
@@ -1494,10 +1593,12 @@ impl ClothSimSession {
                 l
             },
             vert_layer,
+            vert_piece,
             vert_thickness: vec![0.001; n],
             layer_contacts: vec![[None, None]; n],
             vert_room: vec![f32::INFINITY; n],
             sew_frames: SEW_FRAMES,
+            dress: None,
             flat_positions: vec![0.0; n * 3],
             flat_normals: vec![0.0; n * 3],
             flat_strain_pct: vec![0.0; n],
@@ -1665,6 +1766,7 @@ impl ClothSimSession {
                 sum += b.sub(*a).len();
             }
             self.motion_mm_s = sum / frame_start.len().max(1) as f32 * 60.0 * 1000.0;
+            self.advance_dressing();
         }
         self.sync_diagnostic_buffers();
     }
@@ -1672,6 +1774,22 @@ impl ClothSimSession {
     /// Garment layer of every vertex (0 = closest to the body).
     pub fn vertex_layers(&self) -> &[u8] {
         &self.vert_layer
+    }
+
+    /// Index of each vertex's piece in the `pieces` the session was built from.
+    pub fn vertex_pieces(&self) -> &[u32] {
+        &self.vert_piece
+    }
+
+    /// Triangle indices without the triangles of hidden pieces (`shown[piece] == false`). The
+    /// hidden cloth is still simulated, so the garments over it keep their drape.
+    pub fn triangle_indices_shown(&self, shown: &[bool]) -> Vec<u32> {
+        self.triangles
+            .chunks_exact(3)
+            .filter(|t| shown.get(self.vert_piece[t[0] as usize] as usize).copied().unwrap_or(true))
+            .flatten()
+            .copied()
+            .collect()
     }
 
     /// Finds, for every vertex, the nearest triangle of a lower layer (it must stay outside it)
@@ -2005,6 +2123,8 @@ impl ClothSimSession {
             measured_height_mm: self.avatar.measured.height_mm,
             darts_closed: self.darts_closed,
             motion_mm_s: self.motion_mm_s,
+            dressing_layer: self.dressing_progress().map(|d| d.0).unwrap_or(0),
+            dressing_layers: self.dressing_progress().map(|d| d.1).unwrap_or(0),
         }
     }
 

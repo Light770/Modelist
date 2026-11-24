@@ -272,6 +272,17 @@ export const Toolbar: React.FC = () => {
         label: t('toolbar.group.insert'),
         commands: [
           {
+            id: 'add_garment',
+            icon: Shirt,
+            label: t('tb.addGarment'),
+            desc: t('tb.addGarmentDesc'),
+            run: () => {
+              const el = document.activeElement as HTMLElement | null;
+              const r = el?.closest('button')?.getBoundingClientRect() ?? new DOMRect(200, 90, 40, 20);
+              useStudioStore.getState().openGarmentPicker(r);
+            },
+          },
+          {
             id: 'insert_dxf',
             icon: FileInput,
             label: t('tb.insertDxf'),

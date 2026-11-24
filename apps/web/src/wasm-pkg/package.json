@@ -1,0 +1,16 @@
+{
+  "name": "modelist-wasm",
+  "type": "module",
+  "version": "0.2.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "modelist_wasm_bg.wasm",
+    "modelist_wasm.js",
+    "modelist_wasm.d.ts"
+  ],
+  "main": "modelist_wasm.js",
+  "types": "modelist_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

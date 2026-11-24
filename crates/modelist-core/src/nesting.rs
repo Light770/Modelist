@@ -1,4 +1,3 @@
-use crate::blocks::build_template_pieces;
 use crate::model::{
     polygon_signed_area, EvaluatedPiece, GrainRotationMode, PatternProject, Point2,
 };
@@ -99,7 +98,6 @@ pub fn compute_marker_plan(project: &PatternProject, config: &MarkerConfig) -> M
         config.bundle.clone()
     };
 
-    let active_ops = project.active_ops();
     for entry in &active_bundle {
         if entry.quantity == 0 {
             continue;
@@ -107,14 +105,8 @@ pub fn compute_marker_plan(project: &PatternProject, config: &MarkerConfig) -> M
         let m = project
             .size_table
             .measurements_for(&entry.size, &project.measurements);
-        let (pieces, stitching, _, _) = build_template_pieces(
-            &project.template_id,
-            &m,
-            &project.ease,
-            &project.variables,
-            &active_ops,
-            &project.custom_pieces,
-        );
+        let draft = crate::blocks::build_project_pieces(project, &m);
+        let (pieces, stitching) = (draft.pieces, draft.stitching);
         let evals: Vec<EvaluatedPiece> = pieces
             .iter()
             .map(|p| evaluate_piece(p, &stitching.bindings, &pieces))

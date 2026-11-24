@@ -815,6 +815,27 @@ export const en = {
   'cmdline.set': '{name} = {value}',
   'cmdline.error': 'Could not apply: {error}',
   'cmdline.unknown': 'No command matches "{text}"',
+
+  // --- Garments (components) ---
+  'left.garments': 'Garments ({count})',
+  'left.addGarment': 'Add a garment from the pattern library',
+  'left.layer': 'Layer {n}',
+  'left.layerHint': '3D layer: 0 is next to the body. A tee on a lower layer than the trousers is tucked in.',
+  'left.layerOut': 'Wear over (outer layer)',
+  'left.layerIn': 'Wear under (inner layer)',
+  'left.show3d': 'Show in 3D',
+  'left.hide3d': 'Hide in 3D (still worn, the others keep their drape)',
+  'left.showGarment': 'Show garment',
+  'left.hideGarment': 'Hide garment everywhere (canvas, exports, 3D)',
+  'left.removeGarment': 'Remove garment',
+  'left.garmentRowHint': 'Click to make it the active garment: edits, parameters and fabrics apply to it. Double-click to rename.',
+  'left.activeGarment': 'Active',
+  'tb.addGarment': 'Garment',
+  'tb.addGarmentDesc': 'Add a garment from the pattern library to this document. Each garment keeps its own history, ease and fabrics, and is worn on the same body.',
+  'status.garmentAdded': '{name} added as layer {layer}',
+  'status.garmentRemoved': 'Garment removed',
+  'panel.garmentScope': 'Applies to {name}',
+  'status.dressing': 'Dressing layer {layer} of {count}',
 } as const;
 
 export type MessageKey = keyof typeof en;

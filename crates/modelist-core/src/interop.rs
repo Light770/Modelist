@@ -1,4 +1,3 @@
-use crate::blocks::build_template_pieces;
 use crate::curve::{edge_total_length, fit_cubic_schneider};
 use crate::model::{
     det_id, polygon_signed_area, ArrangementZone, ClosedPolyCurve, CornerRule, CurveSegment,
@@ -822,19 +821,15 @@ pub struct PomRow {
 
 pub fn compute_pom_table(project: &PatternProject) -> Vec<PomRow> {
     let mut rows_map: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
-    let active_ops = project.active_ops();
     for size in &project.size_table.sizes {
         let m = project
             .size_table
             .measurements_for(size, &project.measurements);
-        let (pieces, _, _, _) = build_template_pieces(
-            &project.template_id,
-            &m,
-            &project.ease,
-            &project.variables,
-            &active_ops,
-            &project.custom_pieces,
-        );
+        let pieces: Vec<PatternPiece> = crate::blocks::build_project_pieces(project, &m)
+            .pieces
+            .into_iter()
+            .filter(|p| p.visible)
+            .collect();
         for p in &pieces {
             for (ei, e) in p.seam_loop.edges.iter().enumerate() {
                 let key = format!("{} — {} (#{})", p.code, e.label, ei + 1);
@@ -1190,19 +1185,15 @@ pub fn export_aama_rul(project: &PatternProject) -> String {
     let sizes = &project.size_table.sizes;
 
     let mut per_size_pieces: HashMap<String, Vec<PatternPiece>> = HashMap::new();
-    let active_ops = project.active_ops();
     for size in sizes {
         let m = project
             .size_table
             .measurements_for(size, &project.measurements);
-        let (pieces, _, _, _) = build_template_pieces(
-            &project.template_id,
-            &m,
-            &project.ease,
-            &project.variables,
-            &active_ops,
-            &project.custom_pieces,
-        );
+        let pieces: Vec<PatternPiece> = crate::blocks::build_project_pieces(project, &m)
+            .pieces
+            .into_iter()
+            .filter(|p| p.visible)
+            .collect();
         per_size_pieces.insert(size.clone(), pieces);
     }
 

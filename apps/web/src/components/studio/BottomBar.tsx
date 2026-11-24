@@ -81,7 +81,12 @@ export const BottomBar: React.FC = () => {
                 style={{ background: (stats.motion_mm_s ?? 0) < 15 ? '#10b981' : '#f59e0b' }}
               />
               <span>
-                3D {(stats.motion_mm_s ?? 0) < 15 ? t('v3d.settled') : t('v3d.settling')}
+                3D{' '}
+                {stats.dressing_layers
+                  ? t('status.dressing', { layer: stats.dressing_layer ?? 1, count: stats.dressing_layers })
+                  : (stats.motion_mm_s ?? 0) < 15
+                    ? t('v3d.settled')
+                    : t('v3d.settling')}
               </span>
               <span className={stats.max_strain_pct > 15 ? 'text-amber-600' : undefined}>
                 {t('status.strain', { pct: stats.max_strain_pct.toFixed(1) })}
