@@ -1,0 +1,2559 @@
+{
+  "$defs": {
+    "ArrangementZone": {
+      "enum": [
+        "front_torso",
+        "back_torso",
+        "sleeve_left",
+        "sleeve_right",
+        "front_skirt",
+        "back_skirt",
+        "front_leg",
+        "back_leg",
+        "flat_custom"
+      ],
+      "type": "string"
+    },
+    "BeltLoopSpec": {
+      "properties": {
+        "arch_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "base_edge_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "positions_t": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "top_edge_id": {
+          "default": null,
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "width_mm": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "base_edge_id",
+        "positions_t",
+        "width_mm",
+        "arch_mm"
+      ],
+      "type": "object"
+    },
+    "BodyMeasurements": {
+      "properties": {
+        "ankle_mm": {
+          "default": 230.0,
+          "format": "double",
+          "type": "number"
+        },
+        "armscye_depth_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "back_waist_len_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "bicep_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "bust_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "crotch_depth_mm": {
+          "default": 265.0,
+          "format": "double",
+          "type": "number"
+        },
+        "hip_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "inseam_mm": {
+          "default": 780.0,
+          "format": "double",
+          "type": "number"
+        },
+        "knee_mm": {
+          "default": 385.0,
+          "format": "double",
+          "type": "number"
+        },
+        "shoulder_width_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "skirt_len_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "sleeve_len_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "thigh_mm": {
+          "default": 580.0,
+          "format": "double",
+          "type": "number"
+        },
+        "waist_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "waist_to_hip_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "wrist_mm": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "bust_mm",
+        "waist_mm",
+        "hip_mm",
+        "back_waist_len_mm",
+        "shoulder_width_mm",
+        "armscye_depth_mm",
+        "bicep_mm",
+        "sleeve_len_mm",
+        "wrist_mm",
+        "skirt_len_mm",
+        "waist_to_hip_mm"
+      ],
+      "type": "object"
+    },
+    "ButtonSpec": {
+      "properties": {
+        "color_hex": {
+          "type": "string"
+        },
+        "diameter_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "edge_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "param_t": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "edge_id",
+        "param_t",
+        "diameter_mm",
+        "color_hex"
+      ],
+      "type": "object"
+    },
+    "ClosedPolyCurve": {
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/PolyEdge"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "edges"
+      ],
+      "type": "object"
+    },
+    "ComponentRef": {
+      "description": "Where a garment of the project is stored.",
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path"
+      ],
+      "type": "object"
+    },
+    "CornerRule": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "miter",
+              "type": "string"
+            },
+            "limit": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "limit"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "bevel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "square",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "folded_hem",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "matched_seam",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "dart_cap",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CurveSegment": {
+      "oneOf": [
+        {
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/Point2"
+            },
+            "kind": {
+              "const": "line",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "end"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "c1": {
+              "$ref": "#/$defs/Point2"
+            },
+            "c2": {
+              "$ref": "#/$defs/Point2"
+            },
+            "end": {
+              "$ref": "#/$defs/Point2"
+            },
+            "kind": {
+              "const": "cubic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "c1",
+            "c2",
+            "end"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DartCapStyle": {
+      "enum": [
+        "folded_reflection",
+        "pointed",
+        "cutout"
+      ],
+      "type": "string"
+    },
+    "DartEntity": {
+      "properties": {
+        "apex": {
+          "$ref": "#/$defs/Point2"
+        },
+        "cap_style": {
+          "$ref": "#/$defs/DartCapStyle"
+        },
+        "edge_id": {
+          "default": null,
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edge_idx": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fold_dir": {
+          "$ref": "#/$defs/DartFoldDir"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "intake_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "leg_a_t": {
+          "format": "double",
+          "type": "number"
+        },
+        "leg_b_t": {
+          "format": "double",
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "apex",
+        "edge_idx",
+        "leg_a_t",
+        "leg_b_t",
+        "intake_mm",
+        "fold_dir",
+        "cap_style"
+      ],
+      "type": "object"
+    },
+    "DartFoldDir": {
+      "enum": [
+        "toward_cf",
+        "toward_cb",
+        "toward_hem",
+        "toward_side"
+      ],
+      "type": "string"
+    },
+    "DrawstringSpec": {
+      "properties": {
+        "casing_edge_id": {
+          "description": "Edge along which the drawstring casing runs (e.g. Waistband Top or Hood Front).",
+          "format": "uuid",
+          "type": "string"
+        },
+        "color_hex": {
+          "description": "Cord colour hex string (e.g. \"#ebe7de\").",
+          "type": "string"
+        },
+        "cord_radius_mm": {
+          "description": "Cord cross-section radius in mm (e.g. 2.5–4.0 mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "eyelet_offset_mm": {
+          "description": "Eyelet offset from Center Front along the casing, in mm (e.g. 18–25 mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "opposite_edge_id": {
+          "default": null,
+          "description": "Optional opposite edge of the casing strip (e.g. Waistband Seam) so eyelets sit\ncentered in the band height.",
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tail_length_mm": {
+          "description": "Hanging cord tail length emerging from each eyelet, in mm (e.g. 160–240 mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "tighten_ratio": {
+          "description": "Default tightening ratio (0.65..1.0; 1.0 = relaxed, < 1.0 = cinched).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "casing_edge_id",
+        "tail_length_mm",
+        "cord_radius_mm",
+        "eyelet_offset_mm",
+        "tighten_ratio",
+        "color_hex"
+      ],
+      "type": "object"
+    },
+    "DrillHole": {
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "pos": {
+          "$ref": "#/$defs/Point2"
+        },
+        "radius_mm": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "pos",
+        "radius_mm",
+        "label"
+      ],
+      "type": "object"
+    },
+    "EaseSpec": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "exact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "ease_mm",
+              "type": "string"
+            },
+            "mm": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "mm"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "ease_pct",
+              "type": "string"
+            },
+            "pct": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "pct"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "gather",
+              "type": "string"
+            },
+            "ratio": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "ratio"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "count": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "depth_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "kind": {
+              "const": "pleats",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "count",
+            "depth_mm"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EaseTable": {
+      "properties": {
+        "armscye_ease_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "bicep_ease_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "bust_ease_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "hip_ease_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "sleeve_cap_ease_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "waist_ease_mm": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "bust_ease_mm",
+        "waist_ease_mm",
+        "hip_ease_mm",
+        "bicep_ease_mm",
+        "armscye_ease_mm",
+        "sleeve_cap_ease_mm"
+      ],
+      "type": "object"
+    },
+    "EdgeRef": {
+      "description": "Deterministic UUID-based edge reference inside a SeamInterface.",
+      "properties": {
+        "dir": {
+          "format": "int8",
+          "maximum": 127,
+          "minimum": -128,
+          "type": "integer"
+        },
+        "edge_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "piece_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "piece_id",
+        "edge_id",
+        "dir"
+      ],
+      "type": "object"
+    },
+    "ElasticBandSpec": {
+      "properties": {
+        "stiffness_n_m": {
+          "description": "Elastic tensile stiffness in N/m (120–350 N/m typical).",
+          "format": "double",
+          "type": "number"
+        },
+        "target_ratio": {
+          "description": "Ratio of finished relaxed elastic length to drafted pattern edge length (0.45..1.0).",
+          "format": "double",
+          "type": "number"
+        },
+        "width_mm": {
+          "description": "Elastic width in mm (used for homogenized casing mass/bend band).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_ratio",
+        "width_mm",
+        "stiffness_n_m"
+      ],
+      "type": "object"
+    },
+    "FabricConstruction": {
+      "description": "How a fabric is constructed. Drives defaults, grouping in the UI and the stretch behaviour.",
+      "enum": [
+        "woven",
+        "knit",
+        "nonwoven"
+      ],
+      "type": "string"
+    },
+    "FabricFinish": {
+      "description": "Surface finish used by the 3D renderer. It changes the look only, never the physics.",
+      "enum": [
+        "plain",
+        "twill",
+        "satin",
+        "jersey",
+        "rib",
+        "sheer",
+        "terry"
+      ],
+      "type": "string"
+    },
+    "FabricSpec": {
+      "description": "Physical fabric description consumed by the 3D solver.\n\nEvery mechanical field is a measurable quantity (KES-F / FAST style), so a mill sheet or a\nlab test can be typed in directly:\n- tensile stiffness in N/m: force per metre of width per unit strain, in the low-load region;\n- shear stiffness in N/m: in-plane resistance to bias distortion;\n- bending rigidity in uN*m (1 gf*cm2/cm = 98 uN*m), measured with the warp or the weft yarns bent;\n- max stretch in %: strain at which the yarns jam and the fabric locks (wovens 2-5, knits 20-100).",
+      "properties": {
+        "bend_stiffness": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ],
+          "writeOnly": true
+        },
+        "bend_warp_un_m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "bend_weft_un_m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "buckling_ratio": {
+          "default": 0.0,
+          "description": "Resistance to in-plane compression relative to stretching (0.02..1). Lower values let the\nfabric gather into soft wrinkles instead of buckling into sharp creases.",
+          "format": "double",
+          "type": "number"
+        },
+        "color_hex": {
+          "default": "#335482",
+          "type": "string"
+        },
+        "composition": {
+          "default": "",
+          "type": "string"
+        },
+        "construction": {
+          "$ref": "#/$defs/FabricConstruction",
+          "default": "woven"
+        },
+        "damping": {
+          "default": 0.0,
+          "description": "Internal damping, 0 (lively) to 1 (dead).",
+          "format": "double",
+          "type": "number"
+        },
+        "density_gsm": {
+          "format": "double",
+          "type": "number"
+        },
+        "finish": {
+          "$ref": "#/$defs/FabricFinish",
+          "default": "plain"
+        },
+        "friction": {
+          "default": 0.0,
+          "description": "Fabric-on-skin Coulomb friction coefficient.",
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "max_stretch_warp_pct": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "max_stretch_weft_pct": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "shear_n_m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "shear_stiffness": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ],
+          "writeOnly": true
+        },
+        "shrinkage_pct": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ],
+          "writeOnly": true
+        },
+        "shrinkage_warp_pct": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "shrinkage_weft_pct": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "stretch_warp_n_m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "stretch_weft_n_m": {
+          "default": 0.0,
+          "format": "double",
+          "type": "number"
+        },
+        "thickness_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "warp_stiffness": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ],
+          "writeOnly": true
+        },
+        "weft_stiffness": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ],
+          "writeOnly": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "density_gsm",
+        "thickness_mm"
+      ],
+      "type": "object"
+    },
+    "GarmentComponent": {
+      "description": "One garment of a project (a tee, a vest, trousers): its template, ease, formulas, fabrics,\nconstruction history and pieces. Every component of a file is drafted on the same body.",
+      "properties": {
+        "custom_pieces": {
+          "items": {
+            "$ref": "#/$defs/PatternPiece"
+          },
+          "type": "array"
+        },
+        "ease": {
+          "$ref": "#/$defs/EaseTable"
+        },
+        "fabric": {
+          "$ref": "#/$defs/FabricSpec",
+          "default": {
+            "bend_warp_un_m": 7.0,
+            "bend_weft_un_m": 5.0,
+            "buckling_ratio": 0.25,
+            "color_hex": "#a9c0db",
+            "composition": "100% cotton",
+            "construction": "woven",
+            "damping": 0.3,
+            "density_gsm": 115.0,
+            "finish": "plain",
+            "friction": 0.4,
+            "id": "cotton_poplin",
+            "max_stretch_warp_pct": 2.5,
+            "max_stretch_weft_pct": 4.0,
+            "name": "Cotton Poplin (115 gsm)",
+            "shear_n_m": 60.0,
+            "shrinkage_warp_pct": 0.0,
+            "shrinkage_weft_pct": 0.0,
+            "stretch_warp_n_m": 6000.0,
+            "stretch_weft_n_m": 3500.0,
+            "thickness_mm": 0.25
+          }
+        },
+        "id": {
+          "description": "Written once when the component is created and saved with it.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "id_ns": {
+          "default": "",
+          "description": "Namespace for the IDs its template drafts (empty for the first component of a file and\nfor migrated files, so their IDs stay as they were). See [`remap_entity_ids`].",
+          "type": "string"
+        },
+        "layer": {
+          "default": 0,
+          "description": "Garment layer in the 3D fit (0 = next to the body). Tucking a tee into trousers is\ngiving the tee the lower layer.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "offset_2d": {
+          "$ref": "#/$defs/Point2",
+          "default": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "description": "Where its drafted pieces sit on the 2D canvas, mm."
+        },
+        "ops": {
+          "items": {
+            "$ref": "#/$defs/ParametricOp"
+          },
+          "type": "array"
+        },
+        "role_fabrics": {
+          "default": [],
+          "description": "Fabrics for piece roles other than the shell (rib, lining, contrast...).",
+          "items": {
+            "$ref": "#/$defs/RoleFabric"
+          },
+          "type": "array"
+        },
+        "rollback_index": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "suppressed_ops": {
+          "default": [],
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template_id": {
+          "type": "string"
+        },
+        "variables": {
+          "items": {
+            "$ref": "#/$defs/ParametricVar"
+          },
+          "type": "array"
+        },
+        "visible": {
+          "default": true,
+          "description": "Shown on the 2D canvas and in exports.",
+          "type": "boolean"
+        },
+        "visible_3d": {
+          "default": true,
+          "description": "Shown in the 3D fit. A hidden garment is still worn (the others drape over it), it is\nonly not drawn, so hiding an outer layer reveals what is under it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "template_id",
+        "ease",
+        "variables",
+        "ops",
+        "custom_pieces"
+      ],
+      "type": "object"
+    },
+    "GradeDelta": {
+      "properties": {
+        "dx": {
+          "format": "double",
+          "type": "number"
+        },
+        "dy": {
+          "format": "double",
+          "type": "number"
+        },
+        "edge_idx": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "edge_idx",
+        "size_name",
+        "dx",
+        "dy"
+      ],
+      "type": "object"
+    },
+    "GradeMode": {
+      "enum": [
+        "parametric_mtm",
+        "rule_based_rtw",
+        "hybrid_differential"
+      ],
+      "type": "string"
+    },
+    "GrainRotationMode": {
+      "enum": [
+        "one_way",
+        "two_way",
+        "bias",
+        "free"
+      ],
+      "type": "string"
+    },
+    "GrainlineSpec": {
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/Point2"
+        },
+        "rotation_mode": {
+          "$ref": "#/$defs/GrainRotationMode"
+        },
+        "start": {
+          "$ref": "#/$defs/Point2"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "rotation_mode"
+      ],
+      "type": "object"
+    },
+    "HemSpec": {
+      "properties": {
+        "depth_mm": {
+          "description": "Finished hem depth in mm (e.g. 15–40 mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "fold_count": {
+          "description": "1 = single-fold/overlocked hem, 2 = double-fold enclosed hem.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "turn_out": {
+          "default": false,
+          "description": "True for an exterior turn-up cuff (*revers*), false for inward ourlet.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "depth_mm",
+        "fold_count"
+      ],
+      "type": "object"
+    },
+    "HingeMode": {
+      "enum": [
+        "edge_hinge",
+        "parallel_shift"
+      ],
+      "type": "string"
+    },
+    "InternalLine": {
+      "properties": {
+        "dashed": {
+          "type": "boolean"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "pts": {
+          "items": {
+            "$ref": "#/$defs/Point2"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "pts",
+        "dashed"
+      ],
+      "type": "object"
+    },
+    "Manifest": {
+      "description": "`manifest.json`.",
+      "properties": {
+        "format": {
+          "description": "Always `\"modelist\"`.",
+          "type": "string"
+        },
+        "format_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "modified": {
+          "default": null,
+          "description": "When the file was written (ISO 8601), as given by the writing app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "description": "Every part except `mimetype` and the manifest itself.",
+          "items": {
+            "$ref": "#/$defs/ManifestPart"
+          },
+          "type": "array"
+        },
+        "writer": {
+          "$ref": "#/$defs/Writer"
+        }
+      },
+      "required": [
+        "format",
+        "format_version",
+        "writer",
+        "parts"
+      ],
+      "title": "Manifest",
+      "type": "object"
+    },
+    "ManifestPart": {
+      "properties": {
+        "media_type": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lower-case hex SHA-256 of the part's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "NotchAnchor": {
+      "properties": {
+        "count": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "depth_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "edge_id": {
+          "default": null,
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edge_idx": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "param_t": {
+          "format": "double",
+          "type": "number"
+        },
+        "style": {
+          "$ref": "#/$defs/NotchStyle"
+        }
+      },
+      "required": [
+        "id",
+        "edge_idx",
+        "param_t",
+        "style",
+        "count",
+        "depth_mm"
+      ],
+      "type": "object"
+    },
+    "NotchStyle": {
+      "enum": [
+        "slit",
+        "v",
+        "u",
+        "t",
+        "castle"
+      ],
+      "type": "string"
+    },
+    "ParametricOp": {
+      "oneOf": [
+        {
+          "properties": {
+            "dx": {
+              "format": "double",
+              "type": "number"
+            },
+            "dy": {
+              "format": "double",
+              "type": "number"
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "move_vertex",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "dx",
+            "dy"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dx": {
+              "format": "double",
+              "type": "number"
+            },
+            "dy": {
+              "format": "double",
+              "type": "number"
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "lock_g1": {
+              "type": "boolean"
+            },
+            "op": {
+              "const": "move_handle",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "which": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "which",
+            "dx",
+            "dy",
+            "lock_g1"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "corner_rule": {
+              "$ref": "#/$defs/CornerRule"
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "set_seam_allowance",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "width_mm": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "width_mm",
+            "corner_rule"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "count": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "depth_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "add_notch",
+              "type": "string"
+            },
+            "param_t": {
+              "format": "double",
+              "type": "number"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "style": {
+              "$ref": "#/$defs/NotchStyle"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "param_t",
+            "style",
+            "count",
+            "depth_mm"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "op": {
+              "const": "add_drill_hole",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "x": {
+              "format": "double",
+              "type": "number"
+            },
+            "y": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "x",
+            "y",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/GrainRotationMode"
+            },
+            "op": {
+              "const": "set_grain_rotation",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "true_corner_g1",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "square_90": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "square_90"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "angle_deg": {
+              "format": "double",
+              "type": "number"
+            },
+            "dart_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "pivot_dart",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "target_edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "target_t": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "dart_id",
+            "target_edge_idx",
+            "target_t",
+            "angle_deg"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "end_edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "hinge_mode": {
+              "$ref": "#/$defs/HingeMode"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "slash_spread",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "slash_count": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "spread_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "start_edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "start_edge_idx",
+            "end_edge_idx",
+            "slash_count",
+            "spread_mm",
+            "hinge_mode"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_a_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "edge_b_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "label_a": {
+              "type": "string"
+            },
+            "label_b": {
+              "type": "string"
+            },
+            "op": {
+              "const": "split_style_line",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "t_a": {
+              "format": "double",
+              "type": "number"
+            },
+            "t_b": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_a_idx",
+            "t_a",
+            "edge_b_idx",
+            "t_b",
+            "label_a",
+            "label_b"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "auto_partner_notches": {
+              "type": "boolean"
+            },
+            "binding_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "driver": {
+              "$ref": "#/$defs/SeamDriver"
+            },
+            "ease": {
+              "$ref": "#/$defs/EaseSpec"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "update_seam_binding",
+              "type": "string"
+            },
+            "seam_type": {
+              "$ref": "#/$defs/SeamType"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "binding_id",
+            "driver",
+            "ease",
+            "seam_type",
+            "auto_partner_notches"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/SeamBinding"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "add_seam_binding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "binding"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding": {
+              "$ref": "#/$defs/SeamBinding"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "replace_seam_binding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "binding"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "binding_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "delete_seam_binding",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "binding_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dx": {
+              "format": "double",
+              "type": "number"
+            },
+            "dy": {
+              "format": "double",
+              "type": "number"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "move_piece",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "dx",
+            "dy"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "convert_edge_curve",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "to_cubic": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "to_cubic"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "split_edge_point",
+              "type": "string"
+            },
+            "param_t": {
+              "format": "double",
+              "type": "number"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "param_t"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "set_edge_length",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "target_len_mm": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx",
+            "target_len_mm"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "mirror_piece",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "elastic": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ElasticBandSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hem": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HemSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "set_edge_finish",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "drawstring": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DrawstringSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "set_edge_drawstring",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "belt_loop": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BeltLoopSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "button": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ButtonSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edge_idx": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "op": {
+              "const": "set_edge_hardware",
+              "type": "string"
+            },
+            "piece_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "zipper": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ZipperSpec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "piece_id",
+            "edge_idx"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ParametricVar": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "expr": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "expr",
+        "description"
+      ],
+      "type": "object"
+    },
+    "PatternPiece": {
+      "properties": {
+        "arrangement_zone": {
+          "$ref": "#/$defs/ArrangementZone",
+          "default": "front_torso"
+        },
+        "belt_loops": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BeltLoopSpec"
+          },
+          "type": "array"
+        },
+        "buttons": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ButtonSpec"
+          },
+          "type": "array"
+        },
+        "code": {
+          "type": "string"
+        },
+        "cut_quantity": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cutouts": {
+          "items": {
+            "$ref": "#/$defs/ClosedPolyCurve"
+          },
+          "type": "array"
+        },
+        "darts": {
+          "items": {
+            "$ref": "#/$defs/DartEntity"
+          },
+          "type": "array"
+        },
+        "drawstrings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DrawstringSpec"
+          },
+          "type": "array"
+        },
+        "drill_holes": {
+          "items": {
+            "$ref": "#/$defs/DrillHole"
+          },
+          "type": "array"
+        },
+        "fabric_role": {
+          "type": "string"
+        },
+        "grade_deltas": {
+          "items": {
+            "$ref": "#/$defs/GradeDelta"
+          },
+          "type": "array"
+        },
+        "grainline": {
+          "$ref": "#/$defs/GrainlineSpec"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "internal_lines": {
+          "items": {
+            "$ref": "#/$defs/InternalLine"
+          },
+          "type": "array"
+        },
+        "mirror_fold_edge": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "notches": {
+          "items": {
+            "$ref": "#/$defs/NotchAnchor"
+          },
+          "type": "array"
+        },
+        "seam_loop": {
+          "$ref": "#/$defs/ClosedPolyCurve"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "zippers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ZipperSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "code",
+        "cut_quantity",
+        "grainline",
+        "seam_loop",
+        "cutouts",
+        "darts",
+        "internal_lines",
+        "drill_holes",
+        "notches",
+        "grade_deltas",
+        "visible",
+        "fabric_role"
+      ],
+      "type": "object"
+    },
+    "PatternProject": {
+      "description": "A `.modelist` project: one body, one size run, and the garments (components) worn on it.",
+      "properties": {
+        "active_component": {
+          "default": 0,
+          "description": "The component edits, the parameters page and the timeline apply to.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "components": {
+          "description": "Never empty.",
+          "items": {
+            "$ref": "#/$defs/GarmentComponent"
+          },
+          "type": "array"
+        },
+        "format_version": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grade_mode": {
+          "$ref": "#/$defs/GradeMode"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "measurements": {
+          "$ref": "#/$defs/BodyMeasurements"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size_table": {
+          "$ref": "#/$defs/SizeTable"
+        },
+        "stack_anchor": {
+          "$ref": "#/$defs/StackAnchor"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "measurements",
+        "size_table",
+        "grade_mode",
+        "stack_anchor",
+        "components"
+      ],
+      "title": "PatternProject",
+      "type": "object"
+    },
+    "Point2": {
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "PolyEdge": {
+      "properties": {
+        "corner_rule": {
+          "$ref": "#/$defs/CornerRule"
+        },
+        "elastic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElasticBandSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hem": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HemSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "sa_width_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "segment": {
+          "$ref": "#/$defs/CurveSegment"
+        },
+        "start": {
+          "$ref": "#/$defs/Point2"
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "segment",
+        "sa_width_mm",
+        "corner_rule",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ProjectDoc": {
+      "description": "`project.json`: the project without its garments, which have one part each.",
+      "properties": {
+        "active_component": {
+          "default": 0,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "components": {
+          "description": "The garments, in project order.",
+          "items": {
+            "$ref": "#/$defs/ComponentRef"
+          },
+          "type": "array"
+        },
+        "format_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grade_mode": {
+          "$ref": "#/$defs/GradeMode"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "measurements": {
+          "$ref": "#/$defs/BodyMeasurements"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size_table": {
+          "$ref": "#/$defs/SizeTable"
+        },
+        "stack_anchor": {
+          "$ref": "#/$defs/StackAnchor"
+        }
+      },
+      "required": [
+        "format_version",
+        "id",
+        "name",
+        "measurements",
+        "size_table",
+        "grade_mode",
+        "stack_anchor",
+        "components"
+      ],
+      "title": "ProjectDoc",
+      "type": "object"
+    },
+    "RoleFabric": {
+      "description": "Fabric assigned to a piece role other than the shell (e.g. \"rib\", \"lining\", \"contrast\").",
+      "properties": {
+        "fabric": {
+          "$ref": "#/$defs/FabricSpec"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "fabric"
+      ],
+      "type": "object"
+    },
+    "SeamBinding": {
+      "properties": {
+        "auto_partner_notches": {
+          "default": true,
+          "type": "boolean"
+        },
+        "driver": {
+          "$ref": "#/$defs/SeamDriver",
+          "default": "driver_a"
+        },
+        "ease": {
+          "$ref": "#/$defs/EaseSpec",
+          "default": {
+            "kind": "exact"
+          }
+        },
+        "ease_max_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "ease_min_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "interface_a": {
+          "$ref": "#/$defs/SeamInterface"
+        },
+        "interface_b": {
+          "$ref": "#/$defs/SeamInterface"
+        },
+        "label": {
+          "type": "string"
+        },
+        "seam_type": {
+          "$ref": "#/$defs/SeamType",
+          "default": "plain"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "interface_a",
+        "interface_b",
+        "ease_min_mm",
+        "ease_max_mm"
+      ],
+      "type": "object"
+    },
+    "SeamDriver": {
+      "enum": [
+        "driver_a",
+        "driver_b",
+        "mutual",
+        "monitor_only"
+      ],
+      "type": "string"
+    },
+    "SeamInterface": {
+      "description": "Ordered sequence of edges forming a logical connection boundary (GarmentCode-inspired).",
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/EdgeRef"
+          },
+          "type": "array"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "edges"
+      ],
+      "type": "object"
+    },
+    "SeamType": {
+      "enum": [
+        "plain",
+        "overlock",
+        "french",
+        "flat_felled",
+        "gathered"
+      ],
+      "type": "string"
+    },
+    "SizeTable": {
+      "properties": {
+        "active_size": {
+          "type": "string"
+        },
+        "overrides": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BodyMeasurements"
+          },
+          "type": "object"
+        },
+        "sizes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "visible_sizes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sizes",
+        "active_size",
+        "visible_sizes",
+        "overrides"
+      ],
+      "type": "object"
+    },
+    "StackAnchor": {
+      "enum": [
+        "grainline_midpoint",
+        "bust_or_waist_center",
+        "top_left_anchor"
+      ],
+      "type": "string"
+    },
+    "Writer": {
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ZipperSpec": {
+      "properties": {
+        "color_hex": {
+          "type": "string"
+        },
+        "edge_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "teeth_width_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "zip_fraction": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "edge_id",
+        "zip_fraction",
+        "teeth_width_mm",
+        "color_hex"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://modelist.app/schema/modelist-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parts of a .modelist ZIP container. The first ZIP entry is `mimetype` (stored, content application/vnd.modelist+zip). `manifest.json` follows `Manifest`, `project.json` follows `ProjectDoc`, each `components/<id>/component.json` follows `GarmentComponent`. `PatternProject` is the same project assembled into one JSON document (the debug export and the version-0 .modelist.json files).",
+  "title": "Modelist project container, format 1"
+}

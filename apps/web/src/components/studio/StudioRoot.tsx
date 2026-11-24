@@ -1,5 +1,6 @@
-import React, { Suspense, lazy, useEffect, useRef } from 'react';
-import { initKernel } from '../../lib/kernelClient';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { initKernel, kernel } from '../../lib/kernelClient';
+import { loadAutosave } from '../../lib/localFiles';
 import { openProject, redo, registerInitialDocument, saveProject, undo } from '../../lib/projectActions';
 import { useStudioStore } from '../../store/studioStore';
 import { wheelZoomFactor } from '../../lib/cad/zoom';
@@ -51,6 +52,7 @@ export const StudioRoot: React.FC = () => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const draggingSplitRef = useRef(false);
   const lastCursorRef = useRef<{ x: number; y: number }>({ x: 520, y: 340 });
+  const [autosaveCandidate, setAutosaveCandidate] = useState<Uint8Array | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -80,11 +82,17 @@ export const StudioRoot: React.FC = () => {
     }
 
     initKernel(tmpl)
-      .then((snap) => {
+      .then(async (snap) => {
         if (!active) return;
         setSnapshot(registerInitialDocument(snap));
         setReady(true);
         requestFitView();
+        const saved = await loadAutosave();
+        if (saved && active) {
+          // Container bytes, or JSON text from builds before the container.
+          const bytes = saved.bytes ?? (saved.jsonText ? new TextEncoder().encode(saved.jsonText) : null);
+          if (bytes) setAutosaveCandidate(bytes);
+        }
       })
       .catch((err) => {
         if (!active) return;
@@ -412,6 +420,37 @@ export const StudioRoot: React.FC = () => {
         <PropertiesPanel top={rightOver2d ? RULER_PX + 8 : 8} />
         <DataPanel />
         <GarmentPicker />
+
+        {/* Local autosave offer */}
+        {autosaveCandidate && (
+          <div
+            className="floating-panel absolute bottom-12 left-1/2 -translate-x-1/2 z-40 px-3 py-2 flex items-center gap-2.5 text-xs"
+            role="status"
+          >
+            <span style={{ color: 'var(--text-secondary)' }}>{t('root.autosave')}</span>
+            <button
+              onClick={() => {
+                try {
+                  setSnapshot(kernel.loadProjectFile(autosaveCandidate).snapshot);
+                  requestFitView();
+                } finally {
+                  setAutosaveCandidate(null);
+                }
+              }}
+              className="h-[22px] px-2 rounded-[3px] font-medium text-white cursor-pointer"
+              style={{ background: 'var(--accent)' }}
+            >
+              {t('root.restore')}
+            </button>
+            <button
+              onClick={() => setAutosaveCandidate(null)}
+              className="h-[22px] px-2 rounded-[3px] border cursor-pointer hover:bg-[var(--bg-hover)]"
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              {t('root.dismiss')}
+            </button>
+          </div>
+        )}
       </main>
 
       <BottomBar />

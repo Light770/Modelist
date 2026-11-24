@@ -1,14 +1,75 @@
-import React, { useEffect } from 'react';
-import { FileText, FolderOpen, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, FileInput, FileText, FolderOpen, Plus, Shirt, Trash2, X } from 'lucide-react';
+import { listSavedGarments, thumbnailUrl, type SavedGarment } from '../../lib/garmentLibrary';
 import { getTemplateCatalog } from '../../lib/templateCatalog';
-import { activateDocument, closeDocumentTab, newFromTemplate, openProject } from '../../lib/projectActions';
+import {
+  activateDocument,
+  closeDocumentTab,
+  deleteLibraryGarment,
+  exportGarmentFile,
+  importGarmentFile,
+  insertSavedGarment,
+  newFromTemplate,
+  openProject,
+} from '../../lib/projectActions';
 import { useCatalogT, useT } from '../../lib/i18n';
 import { useStudioStore } from '../../store/studioStore';
 
+/** One saved garment: preview, name, and insert / export / delete. */
+const SavedGarmentRow: React.FC<{ g: SavedGarment }> = ({ g }) => {
+  const t = useT();
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const u = thumbnailUrl(g);
+    setUrl(u);
+    return () => {
+      if (u) URL.revokeObjectURL(u);
+    };
+  }, [g]);
+  const iconBtn = 'w-6 h-6 flex items-center justify-center rounded hover:bg-[var(--bg-subtle)] cursor-pointer';
+  return (
+    <div className="group px-2 py-1.5 flex items-center gap-2 rounded hover:bg-[var(--bg-hover)]" data-saved-garment={g.id}>
+      <div
+        className="w-10 h-10 shrink-0 rounded border flex items-center justify-center overflow-hidden"
+        style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-surface)' }}
+      >
+        {url ? <img src={url} alt="" className="max-w-full max-h-full" /> : <Shirt className="w-4 h-4 opacity-40" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate">{g.name}</div>
+        <div className="text-[10.5px]" style={{ color: 'var(--text-muted)' }}>
+          {t('library.savedOn', { date: new Date(g.saved_at).toLocaleDateString() })}
+        </div>
+      </div>
+      <button onClick={() => void insertSavedGarment(g.id)} className={iconBtn} title={t('library.insert')} aria-label={t('library.insert')}>
+        <Plus className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
+      </button>
+      <button
+        onClick={() => void exportGarmentFile({ entryId: g.id })}
+        className={`${iconBtn} opacity-0 group-hover:opacity-100`}
+        title={t('library.export')}
+        aria-label={t('library.export')}
+      >
+        <Download className="w-3.5 h-3.5" />
+      </button>
+      <button
+        onClick={() => void deleteLibraryGarment(g.id)}
+        className={`${iconBtn} opacity-0 group-hover:opacity-100`}
+        title={t('library.delete')}
+        aria-label={t('library.delete')}
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+};
+
 /**
- * Project space (the grid button in the app bar): the open documents and the starter library
- * to begin a new one. Opens over the canvas and closes on Escape or after a choice.
+ * Project space (the grid button in the app bar): the open documents, the user's saved
+ * garments, and the starter library to begin a new document. Opens over the canvas and closes
+ * on Escape or after a choice.
  */
+
 export const DataPanel: React.FC = () => {
   const t = useT();
   const ct = useCatalogT();
@@ -16,6 +77,11 @@ export const DataPanel: React.FC = () => {
   const documents = useStudioStore((s) => s.documents);
   const activeDocId = useStudioStore((s) => s.activeDocId);
   const toggle = useStudioStore((s) => s.toggleDataPanel);
+  const libraryVersion = useStudioStore((s) => s.libraryVersion);
+  const [saved, setSaved] = useState<SavedGarment[]>([]);
+  useEffect(() => {
+    if (open) void listSavedGarments().then(setSaved);
+  }, [open, libraryVersion]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,6 +163,24 @@ export const DataPanel: React.FC = () => {
             {t('appbar.open')}
           </button>
         </div>
+        {section(t('library.myGarments'))}
+        <div className="px-1.5 space-y-px">
+          {saved.length === 0 ? (
+            <p className="px-2 py-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+              {t('library.empty')}
+            </p>
+          ) : (
+            saved.map((g) => <SavedGarmentRow key={g.id} g={g} />)
+          )}
+          <button
+            onClick={() => void importGarmentFile()}
+            className="w-full h-[28px] px-2 flex items-center gap-2 rounded cursor-pointer hover:bg-[var(--bg-hover)]"
+          >
+            <FileInput className="w-3.5 h-3.5" />
+            <span>{t('library.importFile')}</span>
+          </button>
+        </div>
+
         {(['block', 'style'] as const).map((cat) => (
           <React.Fragment key={cat}>
             {section(cat === 'block' ? t('topbar.blocks') : t('topbar.styles'))}

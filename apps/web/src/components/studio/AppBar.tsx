@@ -23,6 +23,7 @@ import { templateMenuEntries } from './templateMenu';
 import {
   activateDocument,
   closeDocumentTab,
+  exportProjectJson,
   MOD_LABEL as MOD,
   newFromTemplate,
   openProject,
@@ -128,6 +129,7 @@ export const AppBar: React.FC = () => {
     { id: 'save', label: t('appbar.save'), icon: Save, shortcut: `${MOD}S`, onSelect: () => void saveProject() },
     { kind: 'separator', id: 's1' },
     { id: 'export', label: t('appbar.export'), icon: Download, onSelect: () => setExportModalOpen(true) },
+    { id: 'export-json', label: t('appbar.exportJson'), title: t('appbar.exportJsonDesc'), onSelect: () => void exportProjectJson() },
     { kind: 'separator', id: 's2' },
     { id: 'settings', label: t('appbar.settings'), icon: Settings, onSelect: () => setSettingsOpen(true) },
   ];

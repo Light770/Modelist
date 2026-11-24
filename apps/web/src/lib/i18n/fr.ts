@@ -880,4 +880,22 @@ export const fr: Record<MessageKey, string> = {
   'status.garmentRemoved': 'Vêtement retiré',
   'panel.garmentScope': 'S\'applique à {name}',
   'status.dressing': 'Habillage couche {layer} sur {count}',
+
+  // --- Project file ---
+  'appbar.exportJson': 'Exporter en JSON…',
+  'appbar.exportJsonDesc': 'Tout le document dans un seul fichier JSON, pour le débogage ou le suivi de versions. Utilisez Enregistrer pour le fichier .modelist.',
+  'topbar.saveFailed': 'Enregistrement impossible : {error}',
+
+  // --- Garment library ---
+  'library.myGarments': 'Mes vêtements',
+  'library.empty': 'Les vêtements enregistrés depuis un document apparaissent ici, prêts à être insérés dans n\'importe quel projet (réajustés à son corps).',
+  'library.insert': 'Insérer dans ce document',
+  'library.export': 'Enregistrer en fichier .modelist',
+  'library.delete': 'Supprimer de la bibliothèque',
+  'library.importFile': 'Importer un fichier vêtement…',
+  'library.savedOn': 'Enregistré le {date}',
+  'left.saveToLibrary': 'Enregistrer dans mes vêtements (réutiliser dans d\'autres projets)',
+  'left.duplicateGarment': 'Dupliquer le vêtement (avec son historique)',
+  'status.garmentSaved': '{name} enregistré dans Mes vêtements',
+  'status.garmentInserted': '{name} inséré',
 };

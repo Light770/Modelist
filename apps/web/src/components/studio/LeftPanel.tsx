@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  BookmarkPlus,
   Box,
   ChevronDown,
   ChevronRight,
@@ -21,7 +22,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { kernel } from '../../lib/kernelClient';
-import { removeGarment } from '../../lib/projectActions';
+import { duplicateGarment, removeGarment, saveGarmentToLibrary } from '../../lib/projectActions';
 import { formatMm, SEAM_PALETTE } from '../../lib/types';
 import { useStudioStore } from '../../store/studioStore';
 import { useT } from '../../lib/i18n';
@@ -218,6 +219,28 @@ export const LeftPanel: React.FC = () => {
                       </span>
                     )}
                     <div className="flex items-center shrink-0">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void saveGarmentToLibrary(c.id);
+                        }}
+                        className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
+                        title={t('left.saveToLibrary')}
+                        aria-label={t('left.saveToLibrary')}
+                      >
+                        <BookmarkPlus className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          duplicateGarment(c.id);
+                        }}
+                        className="p-0.5 rounded hover:bg-[var(--bg-subtle)] opacity-0 group-hover:opacity-80 hover:!opacity-100"
+                        title={t('left.duplicateGarment')}
+                        aria-label={t('left.duplicateGarment')}
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
                       {multi && (
                         <>
                           <button
