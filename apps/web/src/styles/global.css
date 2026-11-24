@@ -1,69 +1,99 @@
 @import "tailwindcss";
 
+/*
+ * Modelist desktop design language: neutral software greys, 1 px borders, small radii,
+ * dense 12 px type. Chrome (app bar, toolbar) sits a step darker than panels; the canvas
+ * stays light so pattern lines read clearly.
+ */
 :root {
-  --bg-canvas: #f7f5f0;
+  --app-bar: #e4e6ea;
+  --toolbar: #f3f4f6;
+  --bg-canvas: #f7f8fa;
   --bg-surface: #ffffff;
-  --bg-panel: #f2efe9;
+  --bg-panel: #f6f7f9;
   --bg-elevated: #ffffff;
-  --bg-subtle: #e9e5dc;
-  --border-subtle: #ded9ce;
-  --border-strong: #c8c1b4;
-  --text-primary: #17191e;
-  --text-secondary: #585f6d;
-  --text-muted: #7c8391;
-  --accent: #1e5eff;
-  --accent-soft: rgba(30, 94, 255, 0.11);
+  --bg-subtle: #e9ebef;
+  --bg-hover: #e3e6eb;
+  --border-subtle: #d8dbe0;
+  --border-strong: #bfc4cc;
+  --text-primary: #1d2025;
+  --text-secondary: #535a65;
+  --text-muted: #868d98;
+  --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+  --panel-shadow: 0 2px 8px rgba(17, 24, 39, 0.12), 0 0 0 1px rgba(17, 24, 39, 0.06);
   --sa-color: #c97212;
   --notch-color: #d12e2e;
-  --grain-color: #1e5eff;
+  --grain-color: #2563eb;
   --walk-color: #0e9f6e;
-  --grid-minor: rgba(23, 25, 30, 0.045);
-  --grid-major: rgba(23, 25, 30, 0.095);
-  --ruler-bg: #edeae2;
-  --ruler-text: #656b77;
+  --grid-minor: rgba(29, 32, 37, 0.045);
+  --grid-major: rgba(29, 32, 37, 0.09);
+  --ruler-bg: #eceef1;
+  --ruler-text: #67707c;
 }
 
 [data-theme="dark"] {
-  --bg-canvas: #111317;
-  --bg-surface: #181a20;
-  --bg-panel: #15171c;
-  --bg-elevated: #20232b;
-  --bg-subtle: #242832;
-  --border-subtle: #2a2e39;
-  --border-strong: #3b4150;
-  --text-primary: #f1f3f7;
-  --text-secondary: #a1a9b8;
-  --text-muted: #6f7787;
-  --accent: #5591ff;
-  --accent-soft: rgba(85, 145, 255, 0.16);
+  --app-bar: #16181b;
+  --toolbar: #1e2024;
+  --bg-canvas: #25282d;
+  --bg-surface: #2a2d32;
+  --bg-panel: #23262a;
+  --bg-elevated: #2f3237;
+  --bg-subtle: #33373d;
+  --bg-hover: #3a3e45;
+  --border-subtle: #363a41;
+  --border-strong: #4a4f58;
+  --text-primary: #e8eaed;
+  --text-secondary: #a9afb8;
+  --text-muted: #7b828d;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, 0.18);
+  --panel-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.05);
   --sa-color: #f59e0b;
   --notch-color: #f87171;
   --grain-color: #60a5fa;
   --walk-color: #34d399;
   --grid-minor: rgba(255, 255, 255, 0.035);
-  --grid-major: rgba(255, 255, 255, 0.08);
-  --ruler-bg: #16181e;
-  --ruler-text: #7b8394;
+  --grid-major: rgba(255, 255, 255, 0.075);
+  --ruler-bg: #1f2125;
+  --ruler-text: #8a919c;
 }
 
 html,
 body {
   margin: 0;
   padding: 0;
+  height: 100%;
+  overflow: hidden;
   background-color: var(--bg-canvas);
   color: var(--text-primary);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* System UI fonts: no network request, native feel on every desktop. */
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-size: 12px;
   -webkit-font-smoothing: antialiased;
 }
 
+/* Desktop application: never narrower than a laptop window. */
+body {
+  min-width: 1100px;
+  min-height: 640px;
+}
+
 .font-mono-num {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
 ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -72,9 +102,27 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 9999px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 input[type="range"] {
   accent-color: var(--accent);
+}
+
+/* Keyboard focus: a thin accent ring instead of the browser's heavy default; none for mouse. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -2px;
+}
+
+/* Floating windows over the canvas (browser, inspector, command dialogs). */
+.floating-panel {
+  background: var(--bg-surface);
+  border-radius: 4px;
+  box-shadow: var(--panel-shadow);
 }

@@ -28,6 +28,18 @@ let renderVersion = 1;
 let sim3dVersion = 1;
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Open documents (one tab each). Every document owns its own WASM session, so undo history,
+ * selection and the 3D simulation stay per document; `session` points at the active one.
+ */
+interface DocumentSlot {
+  id: string;
+  session: ModelistSession;
+}
+const documents: DocumentSlot[] = [];
+let activeDocumentId = '';
+let documentCounter = 0;
+
 function bumpRender() {
   renderVersion += 1;
   sim3dVersion += 1;
@@ -43,18 +55,68 @@ function scheduleAutosave() {
   }, 600);
 }
 
-export async function initKernel(templateId = 'bodice_sleeve'): Promise<UiSnapshot> {
+async function ensureWasm() {
   if (!wasmReady) {
     wasmReady = initWasm().then(() => undefined);
   }
   await wasmReady;
+}
+
+function activate(slot: DocumentSlot) {
+  if (session && session !== slot.session) {
+    // Only the visible document keeps a 3D simulation allocated.
+    session.dispose_sim3d();
+  }
+  session = slot.session;
+  activeDocumentId = slot.id;
+  bumpRender();
+}
+
+export async function initKernel(templateId = 'bodice_sleeve'): Promise<UiSnapshot> {
+  await ensureWasm();
   if (!session) {
-    session = new ModelistSession(templateId);
+    await openDocument(templateId);
   } else {
     session.load_template(templateId);
+    bumpRender();
   }
-  bumpRender();
   return getSnapshot();
+}
+
+/** Opens a new document tab from a template and makes it active. */
+export async function openDocument(templateId: string): Promise<{ id: string; snapshot: UiSnapshot }> {
+  await ensureWasm();
+  documentCounter += 1;
+  const slot: DocumentSlot = { id: `doc-${documentCounter}`, session: new ModelistSession(templateId) };
+  documents.push(slot);
+  activate(slot);
+  return { id: slot.id, snapshot: getSnapshot() };
+}
+
+/** Makes an open document active and returns its snapshot. */
+export function switchDocument(id: string): UiSnapshot | null {
+  const slot = documents.find((d) => d.id === id);
+  if (!slot) return null;
+  if (slot.id !== activeDocumentId) activate(slot);
+  return getSnapshot();
+}
+
+/** Closes a document (never the last one). Returns the id now active. */
+export function closeDocument(id: string): string | null {
+  if (documents.length < 2) return null;
+  const idx = documents.findIndex((d) => d.id === id);
+  if (idx < 0) return null;
+  const [slot] = documents.splice(idx, 1);
+  if (slot.id === activeDocumentId) {
+    activate(documents[Math.min(idx, documents.length - 1)]);
+  }
+  slot.session.dispose_sim3d();
+  slot.session.free();
+  return activeDocumentId;
+}
+
+export function getActiveDocumentId(): string {
+  return activeDocumentId;
 }
 
 export function getSession(): ModelistSession {

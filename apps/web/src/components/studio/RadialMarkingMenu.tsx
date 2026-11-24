@@ -227,7 +227,7 @@ export const RadialMarkingMenu: React.FC<RadialMarkingMenuProps> = ({
       {/* Contextual Linear Actions Card (Anchored cleanly below the wheel) */}
       {(ctxEdge || ctxPiece || hit.kind === 'none') && (
         <div
-          className="absolute min-w-[216px] max-w-[248px] rounded-xl border shadow-xl py-1.5 text-xs backdrop-blur-md"
+          className="absolute min-w-[216px] max-w-[248px] rounded-md border shadow-xl py-1.5 text-xs backdrop-blur-md"
           style={{
             left: Math.max(12, Math.min(cx - 108, viewportWidth - 256)),
             top: Math.min(cy + WHEEL_CENTER - 6, viewportHeight - 190),

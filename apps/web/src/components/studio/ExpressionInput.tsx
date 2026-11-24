@@ -351,7 +351,7 @@ export const ExpressionInput: React.FC<ExpressionInputProps> = ({
         createPortal(
           <div
             onMouseDown={(e) => e.preventDefault()}
-            className="fixed z-50 rounded-lg border shadow-xl py-1 text-[11px] max-h-56 overflow-y-auto"
+            className="fixed z-50 rounded border shadow-xl py-1 text-[11px] max-h-56 overflow-y-auto"
             style={{
               left: Math.min(anchorRect.left, window.innerWidth - anchorRect.width - 12),
               top: Math.min(anchorRect.top, window.innerHeight - 220),
@@ -410,7 +410,7 @@ export const ExpressionInput: React.FC<ExpressionInputProps> = ({
         createPortal(
           <div
             onMouseDown={(e) => e.stopPropagation()}
-            className="fixed z-50 rounded-xl border shadow-2xl p-2.5 text-xs space-y-2"
+            className="fixed z-50 rounded-md border shadow-2xl p-2.5 text-xs space-y-2"
             style={{
               left: Math.min(anchorRect.left, window.innerWidth - 268),
               top: Math.min(anchorRect.top, window.innerHeight - 130),

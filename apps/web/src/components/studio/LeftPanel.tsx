@@ -28,8 +28,7 @@ export const LeftPanel: React.FC = () => {
   const startWalkSeam = useStudioStore((s) => s.startWalkSeam);
   const openCreateSeamCommand = useStudioStore((s) => s.openCreateSeamCommand);
   const openEditSeamCommand = useStudioStore((s) => s.openEditSeamCommand);
-  const setActiveTab = useStudioStore((s) => s.setActiveTab);
-  const setRightPanelOpen = useStudioStore((s) => s.setRightPanelOpen);
+  const openPanelPage = useStudioStore((s) => s.openPanelPage);
   const setStatusMessage = useStudioStore((s) => s.setStatusMessage);
   const t = useT();
 
@@ -48,33 +47,18 @@ export const LeftPanel: React.FC = () => {
     );
   };
 
-  const openInspectorTab = (tab: 'measurements' | 'piece' | 'grading' | 'formulas' | 'fabric') => {
-    setActiveTab(tab);
-    setRightPanelOpen(true);
+  const openInspectorTab = (tab: 'measurements' | 'fabric' | 'grading') => {
+    openPanelPage(tab === 'measurements' ? 'params' : tab === 'fabric' ? 'materials' : 'grading');
   };
 
   return (
-    <aside
-      className="w-60 shrink-0 border-r flex flex-col overflow-y-auto select-none text-xs"
-      style={{
-        background: 'var(--bg-panel)',
-        borderColor: 'var(--border-subtle)',
-      }}
-    >
-      {/* Browser Tree Header */}
-      <div
-        className="px-3 py-1.5 border-b flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider"
-        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-      >
-        <span>{t('left.browser')}</span>
-        <span className="font-mono-num">{t('left.base', { size: snapshot.active_size })}</span>
-      </div>
+    <div className="flex flex-col select-none text-xs">
 
       {/* Node 1: Document Setup / Calibration / Fabric (Collapsed by default like Fusion 360) */}
       <div className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
         <button
           onClick={() => setSetupOpen((v) => !v)}
-          className="w-full px-2.5 py-2 flex items-center gap-1.5 hover:bg-[var(--bg-subtle)] cursor-pointer text-[11px] font-semibold"
+          className="w-full px-2 h-[26px] flex items-center gap-1.5 hover:bg-[var(--bg-hover)] cursor-pointer text-[11px] font-semibold"
         >
           {setupOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           <SlidersHorizontal className="w-3.5 h-3.5 opacity-70" />
@@ -126,7 +110,7 @@ export const LeftPanel: React.FC = () => {
 
       {/* Node 2: Pattern Pieces Tree */}
       <div className="border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-        <div className="px-2.5 py-2 flex items-center justify-between">
+        <div className="px-2 h-[26px] flex items-center justify-between">
           <button
             onClick={() => setPiecesOpen((v) => !v)}
             className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold"
@@ -138,17 +122,16 @@ export const LeftPanel: React.FC = () => {
         </div>
 
         {piecesOpen && (
-          <div className="px-2 pb-2.5 space-y-1">
+          <div className="px-1.5 pb-2 space-y-px">
             {snapshot.pieces.map((p) => {
               const selected = snapshot.selected_piece_id === p.id;
               return (
                 <div
                   key={p.id}
                   onClick={() => setSnapshot(kernel.setSelection(p.id, null))}
-                  className="px-2 py-1.5 rounded-lg border cursor-pointer transition group"
+                  className="px-2 py-1 rounded-[3px] cursor-pointer group hover:bg-[var(--bg-hover)]"
                   style={{
-                    background: selected ? 'var(--bg-surface)' : 'transparent',
-                    borderColor: selected ? 'var(--accent)' : 'transparent',
+                    background: selected ? 'var(--accent-soft)' : undefined,
                   }}
                 >
                   <div className="flex items-center justify-between gap-1">
@@ -210,7 +193,7 @@ export const LeftPanel: React.FC = () => {
 
       {/* Node 3: Seam Interfaces Tree (Direct Click-to-Select + Fusion 360 Floating Editor) */}
       <div className="flex-1 flex flex-col">
-        <div className="px-2.5 py-2 flex items-center justify-between">
+        <div className="px-2 h-[26px] flex items-center justify-between">
           <button
             onClick={() => setSeamsOpen((v) => !v)}
             className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold"
@@ -240,14 +223,14 @@ export const LeftPanel: React.FC = () => {
         </div>
 
         {seamsOpen && (
-          <div className="px-2 pb-3 space-y-1.5">
+          <div className="px-1.5 pb-2 space-y-px">
             {snapshot.stitching_links.length === 0 ? (
               <button
                 onClick={() => openCreateSeamCommand()}
-                className="w-full p-2.5 rounded-lg border border-dashed text-center text-[11px] hover:bg-[var(--bg-subtle)] cursor-pointer"
+                className="w-full p-2 rounded-[3px] border border-dashed text-center text-[11px] hover:bg-[var(--bg-hover)] cursor-pointer"
                 style={{ borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
               >
-                + Click to pick edges &amp; create your first seam
+                {t('left.firstSeam')}
               </button>
             ) : (
               snapshot.stitching_links.map((link) => {
@@ -268,10 +251,10 @@ export const LeftPanel: React.FC = () => {
                     key={link.id}
                     onClick={() => setSnapshot(kernel.setSelectedBinding(link.id))}
                     onDoubleClick={() => openEditSeamCommand(link)}
-                    className="p-2 rounded-lg border cursor-pointer transition space-y-1.5"
+                    className="px-2 py-1.5 rounded-[3px] border cursor-pointer space-y-1 hover:bg-[var(--bg-hover)]"
                     style={{
-                      background: isSelected ? 'var(--bg-surface)' : 'transparent',
-                      borderColor: isSelected ? swatchColor : 'var(--border-subtle)',
+                      background: isSelected ? 'var(--accent-soft)' : undefined,
+                      borderColor: isSelected ? swatchColor : 'transparent',
                     }}
                     title={t('left.seamRowHint')}
                   >
@@ -324,6 +307,6 @@ export const LeftPanel: React.FC = () => {
           </div>
         )}
       </div>
-    </aside>
+    </div>
   );
 };

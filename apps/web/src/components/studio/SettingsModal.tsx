@@ -74,7 +74,7 @@ export const SettingsModal: React.FC = () => {
         role="dialog"
         aria-modal="true"
         aria-label={t('settings.title')}
-        className="w-[440px] max-w-[92vw] rounded-xl border shadow-xl"
+        className="w-[440px] max-w-[92vw] rounded-md border shadow-xl"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
       >
         <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>

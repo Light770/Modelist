@@ -133,7 +133,7 @@ export const FabricPanel: React.FC<{ snapshot: UiSnapshot }> = ({ snapshot }) =>
   return (
     <div className="space-y-3">
       {/* Shell fabric: preset, drape summary, colour, finish */}
-      <div className="p-2.5 rounded-lg border space-y-2" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+      <div className="p-2.5 rounded border space-y-2" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
             {t('fabric.active')}
@@ -223,7 +223,7 @@ export const FabricPanel: React.FC<{ snapshot: UiSnapshot }> = ({ snapshot }) =>
       </div>
 
       {/* Physical properties, grouped */}
-      <div className="p-2.5 rounded-lg border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+      <div className="p-2.5 rounded border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
         <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
           {t('fabric.properties')}
         </div>
@@ -262,7 +262,7 @@ export const FabricPanel: React.FC<{ snapshot: UiSnapshot }> = ({ snapshot }) =>
 
       {/* Per-role fabrics (rib, lining, contrast...) */}
       {snapshot.role_fabrics.length > 0 && (
-        <div className="p-2.5 rounded-lg border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+        <div className="p-2.5 rounded border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
           <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
             {t('fabric.roles')}
           </div>

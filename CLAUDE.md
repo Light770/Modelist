@@ -33,8 +33,9 @@ crates/
                            assets/mannequin_cc0.bin  baked by scripts/bake_mannequin_asset.py (CC0 MakeHuman data)
   modelist-wasm/           wasm-bindgen facade: one `ModelistSession` struct exposing all commands
 apps/web/                  Astro 5 + React 19 + Tailwind 4 + zustand
-  src/pages/studio.astro   mounts <StudioRoot client:only="react" />
-  src/components/studio/   UI chrome + Viewport2D (Canvas2D) + Viewport3D (WebGL2, React.lazy)
+  src/pages/index.astro    the app itself: mounts <StudioRoot client:only="react" /> full-window
+                           (studio.astro is the same page, kept for old /studio links; no marketing site)
+  src/components/studio/   desktop shell + Viewport2D (Canvas2D) + Viewport3D (WebGL2, React.lazy)
   src/lib/kernelClient.ts  sole TS wrapper around ModelistSession (render/sim versions, autosave)
   src/lib/types.ts         TS mirror of Rust JSON schemas (keep in sync!)
   src/lib/cad/             pure-TS UI helpers (command palette, radial menu, expression assist)
@@ -91,4 +92,14 @@ The spec describes the target. These parts of the code currently differ from it,
 - **Fabrics are physical:** `FabricSpec` stores N/m, µN·m, g/m², % (see `FABRIC_PROPERTIES` for keys and ranges); old 0-1 slider files are migrated by `FabricSpec::normalized()`. Never add a non-physical fabric knob; extend `FABRIC_PROPERTIES` instead. `fabric_*` formula variables are mirrors of the shell fabric and are read-only.
 - **Sim changes need the drape checks:** `cargo test -p modelist-sim3d --release` runs the textile calibration tests and the drape-quality tests (poke-through, creases, waist hold per fabric). Seam gaps and strain alone do not catch crumpling.
 - **All UI text goes through i18n:** `const t = useT()` and `t('key')`; add the key to `en.ts` and `fr.ts` (fr is typed, a missing key fails `npm run check`). Kernel catalog names (templates, fabric presets, measurements) are translated by id with `useCatalogT()`. Pattern data typed by users is never translated.
-- Studio deep links: `/studio?template=<id>&mode=2d|split|3d&lang=en|fr&tab=<inspector tab>`.
+- Studio deep links: `/?template=<id>&mode=2d|split|3d&lang=en|fr&tab=params|materials|grading` (also under `/studio`).
+
+## Desktop shell (Fusion-style)
+
+The studio is a desktop application, not a web page: `body` has a 1100 px minimum width and nothing scrolls except panels. The layout follows the user's sketch (2026-11-24). From top to bottom:
+- **`AppBar`**: project space button (`DataPanel`: open documents + starter library), File menu, save/undo/redo, **document tabs** (`+` opens a template in a new tab, double-click renames), **Params**, and **2D / 3D check toggles** (both on = side by side; at least one stays on). Each document has its own WASM `ModelistSession` (`openDocument` / `switchDocument` / `closeDocument` in `kernelClient.ts`), so undo history stays per tab; only the visible one keeps a 3D simulation.
+- **`Toolbar`**: a **Design ▾ / Production** workspace switch, then tabs (Design: Patterning, Sewing, Styling, Rendering, Materials, Tools; Production: Grading, Output), then command groups. Commands are data (`ToolCommand` / `ToolGroup`): icon, label and description from `cmd.<id>.label|desc` or `tb.*` keys, shortcut, active/disabled state. A group label opens a menu of all its commands; hovering shows a card. While a command runs, a highlighted contextual group offers Finish / Cancel. Add new commands here, not as floating buttons on the canvas.
+- **Canvas** (`<main>`): the 2D and 3D views fill it. The Browser (`LeftPanel` in a `FloatingPanel`) floats top-left. The right side is **`PropertiesPanel`**, which is contextual (progressive discovery): a page opened on purpose (`panelPage`: params, materials, grading, piece) wins, else the running command's options (`SeamCommandDialog`, or `ToolOptions` for tools in `TOOLS_WITH_OPTIONS`), else the selected piece (with a selected-edge card). With nothing to show it disappears; closing it hides it until the context changes. Tool options and prompts live in `ToolOptions.tsx` (`TOOL_PROMPTS`), not as HUDs on the canvas. Each view has a bottom-centre navigation bar; 2D "fit" centres the pattern in the area not covered by panels (`visibleInsets`).
+- **`BottomBar`**: the parametric history (timeline) across the full width, then the **`CommandLine`** ("/" focuses it): fuzzy command search in the current language, `name = value` sets a measurement, ease or formula variable, and it shows the running tool's prompt. Status (messages, snap, cursor, zoom, units, 3D solver state) sits to its right.
+
+Dropdowns use `Menu.tsx`, which renders into `<body>` through a portal: anything that must appear above the floating panels needs the same treatment, because flex items with a z-index create their own stacking context. 3D play/pause, re-drape, pose and body form live in the store (`sim3dPlaying`, `sim3dResetSeq`, `sim3dPose`, `sim3dBodyForm`); `Viewport3D` reacts to them. Astro's dev toolbar is disabled in `astro.config.mjs` because it covered the status bar.

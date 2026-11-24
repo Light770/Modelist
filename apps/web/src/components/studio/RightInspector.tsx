@@ -12,7 +12,7 @@ import {
   type GrainRotationMode,
   type StackAnchor,
 } from '../../lib/types';
-import { useStudioStore } from '../../store/studioStore';
+import { useStudioStore, type PanelPage } from '../../store/studioStore';
 import { ExpressionInput } from './ExpressionInput';
 import { FabricPanel } from './FabricPanel';
 
@@ -27,11 +27,13 @@ const STITCH_SA_PRESETS: Array<{ label: MessageKey; width: number; rule: CornerR
 
 const isFabricVar = (name: string) => name.startsWith('fabric_');
 
-export const RightInspector: React.FC = () => {
+/**
+ * Pages of the properties panel: parameters (body measurements, ease, formulas), the selected
+ * piece, materials, grading. Which one shows is decided by `PropertiesPanel`.
+ */
+export const RightInspector: React.FC<{ view: PanelPage }> = ({ view }) => {
   const snapshot = useStudioStore((s) => s.snapshot);
   const unit = useStudioStore((s) => s.unit);
-  const activeTab = useStudioStore((s) => s.activeTab);
-  const setActiveTab = useStudioStore((s) => s.setActiveTab);
   const setSnapshot = useStudioStore((s) => s.setSnapshot);
   const t = useT();
   const ct = useCatalogT();
@@ -118,44 +120,10 @@ export const RightInspector: React.FC = () => {
   );
 
   return (
-    <aside
-      className="w-72 shrink-0 border-l flex flex-col overflow-hidden select-none"
-      style={{
-        background: 'var(--bg-panel)',
-        borderColor: 'var(--border-subtle)',
-      }}
-    >
-      {/* Tab Header */}
-      <div
-        className="grid grid-cols-5 border-b text-[11px] font-medium"
-        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
-      >
-        {(
-          [
-            ['measurements', 'inspector.tabBody'],
-            ['piece', 'inspector.tabPiece'],
-            ['fabric', 'inspector.tabFabric'],
-            ['grading', 'inspector.tabGrade'],
-            ['formulas', 'inspector.tabFormulas'],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id)}
-            className="py-2 border-b-2 transition cursor-pointer"
-            style={{
-              borderColor: activeTab === id ? 'var(--accent)' : 'transparent',
-              color: activeTab === id ? 'var(--accent)' : 'var(--text-secondary)',
-            }}
-          >
-            {t(label)}
-          </button>
-        ))}
-      </div>
-
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden select-none">
       {/* Tab Body */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-4 text-xs">
-        {activeTab === 'measurements' && (
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-4 text-xs">
+        {view === 'params' && (
           <>
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -177,7 +145,7 @@ export const RightInspector: React.FC = () => {
                 <div className="space-y-2">{primaryEase.map((m) => renderSlider(m, true))}</div>
               ) : (
                 <button
-                  onClick={() => setActiveTab('formulas')}
+                  onClick={() => document.getElementById('params-formulas')?.scrollIntoView({ behavior: 'smooth' })}
                   className="text-[11px] text-left leading-snug underline-offset-2 hover:underline cursor-pointer"
                   style={{ color: 'var(--text-secondary)' }}
                 >
@@ -210,9 +178,9 @@ export const RightInspector: React.FC = () => {
           </>
         )}
 
-        {activeTab === 'piece' && selectedPiece && (
+        {view === 'piece' && selectedPiece && (
           <>
-            <div className="p-2.5 rounded-lg border space-y-2" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+            <div className="p-2.5 rounded border space-y-2" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
               <div className="flex items-center justify-between">
                 <span className="font-semibold">{selectedPiece.name}</span>
                 <span className="font-mono-num text-[10px]" style={{ color: 'var(--text-muted)' }}>
@@ -275,7 +243,7 @@ export const RightInspector: React.FC = () => {
             </div>
 
             {selectedEdge && (
-              <div className="p-2.5 rounded-lg border space-y-2.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+              <div className="p-2.5 rounded border space-y-2.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
                 <div className="flex items-center justify-between">
                   <span className="font-semibold truncate">
                     #{selectedEdge.edge_idx + 1} {selectedEdge.label}
@@ -488,9 +456,9 @@ export const RightInspector: React.FC = () => {
           </>
         )}
 
-        {activeTab === 'fabric' && <FabricPanel snapshot={snapshot} />}
+        {view === 'materials' && <FabricPanel snapshot={snapshot} />}
 
-        {activeTab === 'grading' && (
+        {view === 'grading' && (
           <>
             <div className="space-y-2.5">
               <div>
@@ -569,7 +537,7 @@ export const RightInspector: React.FC = () => {
                 {snapshot.qa_matrix.map((row) => (
                   <div
                     key={row.link_id}
-                    className="rounded-lg border p-2"
+                    className="rounded border p-2"
                     style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
                   >
                     <div className="font-medium text-[11px] mb-1 truncate">{row.label}</div>
@@ -599,8 +567,11 @@ export const RightInspector: React.FC = () => {
           </>
         )}
 
-        {activeTab === 'formulas' && (
-          <div className="space-y-2.5">
+        {view === 'params' && (
+          <div id="params-formulas" className="space-y-2.5 pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
+              {t('panel.formulas')}
+            </h3>
             <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
               {t('inspector.dagHelp')} {t('inspector.fabricVarsHelp')}
             </p>
@@ -608,7 +579,7 @@ export const RightInspector: React.FC = () => {
               {snapshot.variables.map((v) => (
                 <div
                   key={v.name}
-                  className="p-2 rounded-lg border space-y-1"
+                  className="p-2 rounded border space-y-1"
                   style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
                 >
                   <div className="flex items-center justify-between">
@@ -660,7 +631,7 @@ export const RightInspector: React.FC = () => {
               ))}
             </div>
 
-            <div className="p-2 rounded-lg border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
+            <div className="p-2 rounded border space-y-1.5" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}>
               <div className="text-[10px] font-semibold">{t('inspector.addVariable')}</div>
               <input
                 type="text"
@@ -696,6 +667,6 @@ export const RightInspector: React.FC = () => {
           </div>
         )}
       </div>
-    </aside>
+    </div>
   );
 };

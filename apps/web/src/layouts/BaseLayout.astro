@@ -1,13 +1,9 @@
 ---
 interface Props {
   title?: string;
-  description?: string;
 }
 
-const {
-  title = "Modelist — Hybrid Parametric Fashion Patternmaking CAD",
-  description = "Local-first, web-native fashion patternmaking CAD with a Rust/WASM exact-mm geometry kernel, visual-parametric Silent Math, OCG PDFs, and strict DXF-AAMA.",
-} = Astro.props;
+const { title = "Modelist" } = Astro.props;
 ---
 
 <!doctype html>
@@ -16,13 +12,6 @@ const {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title}</title>
-    <meta name="description" content={description} />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
   </head>
   <body>
     <slot />

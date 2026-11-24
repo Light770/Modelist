@@ -234,13 +234,7 @@ export const ParametricTimeline: React.FC = () => {
 
   return (
     <>
-      <div
-        className="h-9 shrink-0 border-t px-2 flex items-center gap-1 overflow-x-auto select-none text-[10px]"
-        style={{
-          background: 'var(--bg-panel)',
-          borderColor: 'var(--border-subtle)',
-        }}
-      >
+      <div className="h-full flex-1 min-w-0 px-2 flex items-center gap-1 overflow-x-auto select-none text-[10px]">
         {/* Fusion-style Timeline Transport Controls */}
         <div
           className="inline-flex items-center rounded-md border px-0.5 py-0.5 gap-0.5 shrink-0"
@@ -342,7 +336,7 @@ export const ParametricTimeline: React.FC = () => {
         </div>
 
         {totalOps === 0 ? (
-          <span className="italic text-[10px] pl-1" style={{ color: 'var(--text-muted)' }}>
+          <span className="italic text-[10px] pl-1 truncate min-w-0" style={{ color: 'var(--text-muted)' }}>
             {t('timeline.empty')}
           </span>
         ) : (
@@ -449,7 +443,7 @@ export const ParametricTimeline: React.FC = () => {
       {chipMenu && (
         <div
           ref={menuRef}
-          className="fixed z-50 w-52 rounded-xl border shadow-xl py-1 text-xs select-none"
+          className="fixed z-50 w-52 rounded-md border shadow-xl py-1 text-xs select-none"
           style={{
             left: Math.min(chipMenu.x, window.innerWidth - 220),
             top: Math.max(12, chipMenu.y - 165),
@@ -578,7 +572,7 @@ const OpEditModal: React.FC<OpEditModalProps> = ({ op, unit, onClose, onApply })
       className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[1px] flex items-center justify-center p-4"
     >
       <div
-        className="w-80 rounded-xl border shadow-2xl overflow-hidden text-xs"
+        className="w-80 rounded-md border shadow-2xl overflow-hidden text-xs"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
       >
         <div

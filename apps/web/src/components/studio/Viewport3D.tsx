@@ -1,16 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Grid, Pause, Play, RotateCcw, Ruler, X } from 'lucide-react';
+import { Grid3x3, Pause, PersonStanding, Play, RotateCcw, Ruler } from 'lucide-react';
 import { getSim3dVersion, kernel } from '../../lib/kernelClient';
-import { useCatalogT, useT, type MessageKey } from '../../lib/i18n';
-import type {
-  AvatarBodyForm,
-  AvatarPose,
-  Camera3DPreset,
-  DrapeQuality,
-  FabricFinish,
-  FitViewMode,
-  Sim3dStats,
-} from '../../lib/types';
+import { useT, type MessageKey } from '../../lib/i18n';
+import type { Camera3DPreset, FabricFinish, Sim3dStats } from '../../lib/types';
 
 const FINISH_CODE: Record<FabricFinish, number> = {
   plain: 0,
@@ -315,27 +307,24 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   const cameraPreset = useStudioStore((s) => s.sim3dCameraPreset);
   const cameraSeq = useStudioStore((s) => s.sim3dCameraSeq);
 
-  const setSim3dPose = useStudioStore((s) => s.setSim3dPose);
-  const setSim3dBodyForm = useStudioStore((s) => s.setSim3dBodyForm);
-  const setSim3dViewMode = useStudioStore((s) => s.setSim3dViewMode);
   const toggle3dAvatar = useStudioStore((s) => s.toggle3dAvatar);
   const toggle3dFloor = useStudioStore((s) => s.toggle3dFloor);
   const toggle3dTapeLines = useStudioStore((s) => s.toggle3dTapeLines);
   const request3dCamera = useStudioStore((s) => s.request3dCamera);
-  const setWorkspaceMode = useStudioStore((s) => s.setWorkspaceMode);
-  const setSnapshot = useStudioStore((s) => s.setSnapshot);
+  const playing = useStudioStore((s) => s.sim3dPlaying);
+  const setPlaying = useStudioStore((s) => s.setSim3dPlaying);
+  const requestSim3dReset = useStudioStore((s) => s.requestSim3dReset);
+  const resetSeq = useStudioStore((s) => s.sim3dResetSeq);
+  const setSim3dTelemetry = useStudioStore((s) => s.setSim3dTelemetry);
 
-  const [playing, setPlaying] = useState(true);
-  const [stats, setStats] = useState<Sim3dStats | null>(null);
   const statsRef = useRef<Sim3dStats | null>(null);
   const [glError, setGlError] = useState<string | null>(null);
-  const [quality, setQuality] = useState<DrapeQuality | null>(null);
   const t = useT();
-  const ct = useCatalogT();
 
-  useEffect(() => {
-    statsRef.current = stats;
-  }, [stats]);
+  const publishStats = (next: Sim3dStats | null) => {
+    statsRef.current = next;
+    setSim3dTelemetry(next);
+  };
 
   useEffect(() => {
     playingRef.current = playing;
@@ -343,14 +332,26 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
 
   // Strict lifecycle: initialize 3D engine on mount, dispose on unmount!
   useEffect(() => {
-    const initialStats = kernel.initSim3d(pose, bodyForm);
-    statsRef.current = initialStats;
-    setStats(initialStats);
+    publishStats(kernel.initSim3d(pose, bodyForm));
     return () => {
       kernel.disposeSim3d();
+      useStudioStore.getState().setSim3dTelemetry(null, null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Pose, body form and the toolbar's "re-drape" re-arrange the garment (skipped on mount,
+  // where the init above already did it).
+  const arrangedRef = useRef(false);
+  useEffect(() => {
+    if (!arrangedRef.current) {
+      arrangedRef.current = true;
+      return;
+    }
+    publishStats(kernel.resetSim3d(pose, bodyForm));
+    lastVerRef.current = -1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pose, bodyForm, resetSeq]);
 
   // Auto-frame camera smoothly when template changes
   useEffect(() => {
@@ -382,22 +383,6 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
       orb.pitch = 0.08;
     }
   }, [cameraPreset, cameraSeq]);
-
-  const handlePoseChange = (nextPose: AvatarPose) => {
-    setSim3dPose(nextPose);
-    const nextStats = kernel.resetSim3d(nextPose, bodyForm);
-    statsRef.current = nextStats;
-    setStats(nextStats);
-    lastVerRef.current = -1;
-  };
-
-  const handleBodyFormChange = (nextForm: AvatarBodyForm) => {
-    setSim3dBodyForm(nextForm);
-    const nextStats = kernel.resetSim3d(pose, nextForm);
-    statsRef.current = nextStats;
-    setStats(nextStats);
-    lastVerRef.current = -1;
-  };
 
   // Imperative WebGL2 Render + XPBD Step Loop
   useEffect(() => {
@@ -554,17 +539,15 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         uploadAll(true);
         if (syncStats) {
           statsRef.current = syncStats;
-          setStats(syncStats);
+          useStudioStore.getState().setSim3dTelemetry(syncStats);
         }
       } else if (playingRef.current) {
         const nextStats = kernel.stepSim3d(1);
         uploadAll(false);
+        if (nextStats) statsRef.current = nextStats;
         if (nextStats && frameTick % 12 === 0) {
-          statsRef.current = nextStats;
-          setStats(nextStats);
-        }
-        if (frameTick % 90 === 0) {
-          setQuality(kernel.getSim3dQuality());
+          const quality = frameTick % 96 === 0 ? kernel.getSim3dQuality() : undefined;
+          useStudioStore.getState().setSim3dTelemetry(nextStats, quality);
         }
       }
 
@@ -690,302 +673,161 @@ export const Viewport3D: React.FC<{ style?: React.CSSProperties }> = ({ style })
 
   const showLegend = viewMode === 'strain' || viewMode === 'tension' || viewMode === 'clearance';
 
+  const navBtn = (active: boolean): React.CSSProperties => ({
+    background: active ? 'var(--accent-soft)' : undefined,
+    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+  });
+
   return (
     <div
       style={{ ...style, background: 'var(--bg-canvas)' }}
-      className="relative h-full min-w-[260px] flex flex-col overflow-hidden select-none"
+      className="relative h-full min-w-[260px] overflow-hidden select-none"
     >
-      {/* Sleek Compact 3D Window Bar */}
-      <div
-        className="h-9 px-2.5 border-b flex items-center justify-between gap-2 text-[11px] shrink-0"
-        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="font-semibold shrink-0">{t('v3d.title')}</span>
-          <div className="flex items-center gap-0.5 rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}>
-            {(
-              [
-                ['material', 'v3d.modeDrape'],
-                ['strain', 'v3d.modeStrain'],
-                ['tension', 'v3d.modeTension'],
-                ['clearance', 'v3d.modeEase'],
-                ['xray', 'v3d.modeXray'],
-              ] as Array<[FitViewMode, MessageKey]>
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setSim3dViewMode(id)}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium cursor-pointer transition"
-                style={{
-                  background: viewMode === id ? 'var(--bg-surface)' : 'transparent',
-                  color: viewMode === id ? 'var(--accent)' : 'var(--text-secondary)',
-                }}
-              >
-                {t(label)}
-              </button>
-            ))}
-          </div>
+      {glError ? (
+        <div className="p-4 text-xs text-rose-500 font-mono-num">
+          {glError === 'webgl2' ? t('v3d.webglMissing') : glError}
         </div>
-
-        <div className="flex items-center gap-1 shrink-0">
-          <select
-            value={bodyForm}
-            onChange={(e) => handleBodyFormChange(e.target.value as AvatarBodyForm)}
-            className="rounded border px-1.5 py-0.5 text-[10px]"
-            style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
-            title={t('v3d.bodyForm')}
-          >
-            <option value="female">{t('v3d.female')}</option>
-            <option value="neutral">{t('v3d.neutral')}</option>
-            <option value="male">{t('v3d.male')}</option>
-          </select>
-
-          <select
-            value={pose}
-            onChange={(e) => handlePoseChange(e.target.value as AvatarPose)}
-            className="rounded border px-1.5 py-0.5 text-[10px]"
-            style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
-            title={t('v3d.pose')}
-          >
-            <option value="a_pose">{t('v3d.poseA')}</option>
-            <option value="arms_raised">{t('v3d.poseArmsUp')}</option>
-            <option value="t_pose">{t('v3d.poseT')}</option>
-          </select>
-
-          {snapshot && (
-            <select
-              value={snapshot.fabric.id}
-              onChange={(e) => setSnapshot(kernel.setFabricPreset(e.target.value))}
-              className="hidden xl:block rounded border px-1.5 py-0.5 text-[10px] max-w-[116px]"
-              style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
-              title={t('v3d.fabricPreset')}
-            >
-              {snapshot.fabric_catalog.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {ct('fabricPreset', f.id, f.name).split(' (')[0]}
-                </option>
-              ))}
-            </select>
-          )}
-
-          <button
-            onClick={() => setPlaying((p) => !p)}
-            className="p-1 rounded border hover:bg-[var(--bg-subtle)] cursor-pointer"
-            style={{
-              borderColor: playing ? '#0e9f6e' : 'var(--border-subtle)',
-              color: playing ? '#0e9f6e' : 'var(--text-secondary)',
-            }}
-            title={playing ? t('v3d.pause') : t('v3d.play')}
-          >
-            {playing ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-          </button>
-          <button
-            onClick={() => {
-              const nextStats = kernel.resetSim3d(pose, bodyForm);
-              statsRef.current = nextStats;
-              setStats(nextStats);
-              lastVerRef.current = -1;
-            }}
-            className="p-1 rounded border hover:bg-[var(--bg-subtle)] cursor-pointer"
-            style={{ borderColor: 'var(--border-subtle)' }}
-            title={t('v3d.reset')}
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
-          <button
-            onClick={() => setWorkspaceMode('2d')}
-            className="p-1 rounded border hover:bg-[var(--bg-subtle)] cursor-pointer"
-            style={{ borderColor: 'var(--border-subtle)' }}
-            title={t('v3d.close')}
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-
-      {/* Imperative WebGL2 Canvas */}
-      <div className="relative flex-1 min-h-0">
-        {glError ? (
-          <div className="p-4 text-xs text-rose-500 font-mono-num">
-            {glError === 'webgl2' ? t('v3d.webglMissing') : glError}
-          </div>
-        ) : (
-          <canvas
-            ref={canvasRef}
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              orbitRef.current.dragging = true;
-              orbitRef.current.lx = e.clientX;
-              orbitRef.current.ly = e.clientY;
-            }}
-            onPointerMove={(e) => {
-              if (!orbitRef.current.dragging) return;
-              const dx = e.clientX - orbitRef.current.lx;
-              const dy = e.clientY - orbitRef.current.ly;
-              orbitRef.current.lx = e.clientX;
-              orbitRef.current.ly = e.clientY;
-              if (e.shiftKey || e.buttons === 4) {
-                orbitRef.current.targetY = Math.max(
-                  0.25,
-                  Math.min(1.55, orbitRef.current.targetY + dy * 0.0028),
-                );
-              } else {
-                orbitRef.current.yaw -= dx * 0.0085;
-                orbitRef.current.pitch = Math.max(
-                  -0.75,
-                  Math.min(1.05, orbitRef.current.pitch + dy * 0.0075),
-                );
-              }
-            }}
-            onPointerUp={() => {
-              orbitRef.current.dragging = false;
-            }}
-            onWheel={(e) => {
-              e.preventDefault();
-              orbitRef.current.dist = Math.max(
-                0.72,
-                Math.min(3.8, orbitRef.current.dist * (e.deltaY > 0 ? 1.08 : 0.92)),
+      ) : (
+        <canvas
+          ref={canvasRef}
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            orbitRef.current.dragging = true;
+            orbitRef.current.lx = e.clientX;
+            orbitRef.current.ly = e.clientY;
+          }}
+          onPointerMove={(e) => {
+            if (!orbitRef.current.dragging) return;
+            const dx = e.clientX - orbitRef.current.lx;
+            const dy = e.clientY - orbitRef.current.ly;
+            orbitRef.current.lx = e.clientX;
+            orbitRef.current.ly = e.clientY;
+            if (e.shiftKey || e.buttons === 4) {
+              orbitRef.current.targetY = Math.max(
+                0.25,
+                Math.min(1.55, orbitRef.current.targetY + dy * 0.0028),
               );
+            } else {
+              orbitRef.current.yaw -= dx * 0.0085;
+              orbitRef.current.pitch = Math.max(
+                -0.75,
+                Math.min(1.05, orbitRef.current.pitch + dy * 0.0075),
+              );
+            }
+          }}
+          onPointerUp={() => {
+            orbitRef.current.dragging = false;
+          }}
+          onWheel={(e) => {
+            e.preventDefault();
+            orbitRef.current.dist = Math.max(
+              0.72,
+              Math.min(3.8, orbitRef.current.dist * (e.deltaY > 0 ? 1.08 : 0.92)),
+            );
+          }}
+          className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
+        />
+      )}
+
+      {/* Heatmap legend (strain / tension / ease views) */}
+      {showLegend && (
+        <div className="floating-panel absolute bottom-2 left-2 z-10 px-2.5 py-1.5 text-[10px] font-mono-num">
+          <div className="mb-1 font-sans font-semibold text-[10px]">
+            {viewMode === 'strain'
+              ? t('v3d.legendStrain')
+              : viewMode === 'tension'
+                ? t('v3d.legendTension')
+                : t('v3d.legendEase')}
+          </div>
+          <div
+            className="w-28 h-2 rounded-[2px]"
+            style={{
+              background:
+                viewMode === 'clearance'
+                  ? 'linear-gradient(90deg, #e0292e, #f2ad1f, #14bd80, #1a7ae6)'
+                  : 'linear-gradient(90deg, #1a7ae6, #14bd80, #f2ad1f, #e0292e)',
             }}
-            className="w-full h-full block cursor-grab active:cursor-grabbing touch-none"
           />
-        )}
-
-        {/* CLO3D-Style Floating Camera & Display Overlay (Top-Left inside 3D stage) */}
-        <div className="absolute top-2.5 left-2.5 flex flex-wrap items-center gap-1">
-          <div
-            className="flex items-center gap-0.5 rounded-lg border px-1 py-0.5 text-[10px] shadow-xs backdrop-blur-md"
-            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', opacity: 0.92 }}
-          >
-            {(
-              [
-                ['front', 'v3d.front'],
-                ['three_quarter', 'v3d.threeQuarter'],
-                ['left', 'v3d.side'],
-                ['back', 'v3d.back'],
-              ] as Array<[Camera3DPreset, MessageKey]>
-            ).map(([p, lbl]) => (
-              <button
-                key={p}
-                onClick={() => request3dCamera(p)}
-                className="px-1.5 py-0.5 rounded hover:bg-[var(--bg-subtle)] cursor-pointer font-medium"
-                style={{ color: cameraPreset === p ? 'var(--accent)' : 'var(--text-secondary)' }}
-              >
-                {t(lbl)}
-              </button>
-            ))}
+          <div className="flex justify-between mt-0.5 text-[9px]" style={{ color: 'var(--text-muted)' }}>
+            <span>{viewMode === 'clearance' ? t('v3d.tight') : '0'}</span>
+            <span>{viewMode === 'clearance' ? t('v3d.ideal') : viewMode === 'strain' ? '6%' : '80'}</span>
+            <span>{viewMode === 'clearance' ? t('v3d.loose') : viewMode === 'strain' ? '12%+' : '160+'}</span>
           </div>
-          <button
-            onClick={toggle3dAvatar}
-            className="px-2 py-1 rounded-lg border text-[10px] inline-flex items-center gap-1 shadow-xs backdrop-blur-md cursor-pointer"
-            style={{
-              background: 'var(--bg-surface)',
-              borderColor: showAvatar ? 'var(--border-subtle)' : 'var(--accent)',
-              color: showAvatar ? 'var(--text-secondary)' : 'var(--accent)',
-              opacity: 0.92,
-            }}
-            title={t('v3d.avatarTitle')}
-          >
-            {showAvatar ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-            {t('v3d.avatar')}
-          </button>
-          <button
-            onClick={toggle3dTapeLines}
-            className="px-2 py-1 rounded-lg border text-[10px] inline-flex items-center gap-1 shadow-xs backdrop-blur-md cursor-pointer"
-            style={{
-              background: 'var(--bg-surface)',
-              borderColor: showTape ? 'var(--accent)' : 'var(--border-subtle)',
-              color: showTape ? 'var(--accent)' : 'var(--text-secondary)',
-              opacity: 0.92,
-            }}
-            title={t('v3d.tapeTitle')}
-          >
-            <Ruler className="w-3 h-3" />
-            {t('v3d.tape')}
-          </button>
-          <button
-            onClick={toggle3dFloor}
-            className="p-1 rounded-lg border shadow-xs backdrop-blur-md cursor-pointer"
-            style={{
-              background: 'var(--bg-surface)',
-              borderColor: showFloor ? 'var(--accent)' : 'var(--border-subtle)',
-              color: showFloor ? 'var(--accent)' : 'var(--text-secondary)',
-              opacity: 0.92,
-            }}
-            title={t('v3d.floorTitle')}
-          >
-            <Grid className="w-3 h-3" />
-          </button>
         </div>
+      )}
 
-        {/* Heatmap Scale Bar (when in Strain / Tension / Ease mode) */}
-        {showLegend && (
-          <div
-            className="absolute top-2.5 right-2.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-mono-num backdrop-blur-md shadow-xs"
-            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', opacity: 0.94 }}
+      {/* Navigation bar (bottom centre): camera views, scene toggles, simulation */}
+      <div
+        className="floating-panel absolute bottom-2 left-1/2 -translate-x-1/2 z-10 h-[30px] px-1 flex items-center gap-0.5 text-[11px] whitespace-nowrap"
+        role="toolbar"
+        aria-label={t('nav.title3d')}
+      >
+        {(
+          [
+            ['front', 'v3d.front'],
+            ['three_quarter', 'v3d.threeQuarter'],
+            ['left', 'v3d.side'],
+            ['back', 'v3d.back'],
+          ] as Array<[Camera3DPreset, MessageKey]>
+        ).map(([p, lbl]) => (
+          <button
+            key={p}
+            onClick={() => request3dCamera(p)}
+            className="h-[24px] px-1.5 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+            style={navBtn(cameraPreset === p)}
+            title={t('nav.camera', { view: t(lbl) })}
           >
-            <div className="mb-1 font-sans font-semibold text-[10px]">
-              {viewMode === 'strain'
-                ? t('v3d.legendStrain')
-                : viewMode === 'tension'
-                  ? t('v3d.legendTension')
-                  : t('v3d.legendEase')}
-            </div>
-            <div
-              className="w-28 h-2 rounded-full"
-              style={{
-                background:
-                  viewMode === 'clearance'
-                    ? 'linear-gradient(90deg, #e0292e, #f2ad1f, #14bd80, #1a7ae6)'
-                    : 'linear-gradient(90deg, #1a7ae6, #14bd80, #f2ad1f, #e0292e)',
-              }}
-            />
-            <div className="flex justify-between mt-0.5 text-[9px]" style={{ color: 'var(--text-muted)' }}>
-              <span>{viewMode === 'clearance' ? t('v3d.tight') : '0'}</span>
-              <span>{viewMode === 'clearance' ? t('v3d.ideal') : viewMode === 'strain' ? '6%' : '80'}</span>
-              <span>{viewMode === 'clearance' ? t('v3d.loose') : viewMode === 'strain' ? '12%+' : '160+'}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Compact Bottom Telemetry Bar */}
-        {stats && (
-          <div
-            className="absolute bottom-2.5 left-2.5 right-2.5 rounded-lg border px-2.5 py-1 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono-num backdrop-blur-md"
-            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', opacity: 0.92 }}
-          >
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {t('v3d.telemetry', {
-                tris: stats.triangle_count,
-                stitches: stats.sew_pair_count,
-                darts: stats.darts_closed ?? 0,
-                height: (stats.measured_height_mm / 10).toFixed(0),
-                bust: stats.measured_bust_mm.toFixed(0),
-                waist: stats.measured_waist_mm.toFixed(0),
-                hip: stats.measured_hip_mm.toFixed(0),
-              })}
-            </span>
-            <span>
-              {t('v3d.peakStrain')}{' '}
-              <strong className={stats.max_strain_pct > 15 ? 'text-amber-600' : 'text-emerald-600'}>
-                {stats.max_strain_pct.toFixed(1)}%
-              </strong>{' '}
-              · {t('v3d.easeShort', { ease: stats.avg_clearance_mm.toFixed(0) })}
-              {quality && (
-                <>
-                  {' · '}
-                  <span className={quality.poke_through_count > 0 ? 'text-amber-600' : 'text-emerald-600'}>
-                    {quality.poke_through_count > 0
-                      ? t('v3d.poke', { count: quality.poke_through_count })
-                      : t('v3d.cleanFit')}
-                  </span>
-                </>
-              )}
-              {' · '}
-              {(stats.motion_mm_s ?? 0) < 15 ? t('v3d.settled') : t('v3d.settling')}
-            </span>
-          </div>
-        )}
+            {t(lbl)}
+          </button>
+        ))}
+        <div className="w-px h-4 mx-1" style={{ background: 'var(--border-subtle)' }} />
+        <button
+          onClick={toggle3dAvatar}
+          aria-pressed={showAvatar}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(showAvatar)}
+          title={t('v3d.avatarTitle')}
+        >
+          <PersonStanding className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={toggle3dTapeLines}
+          aria-pressed={showTape}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(showTape)}
+          title={t('v3d.tapeTitle')}
+        >
+          <Ruler className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={toggle3dFloor}
+          aria-pressed={showFloor}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={navBtn(showFloor)}
+          title={t('v3d.floorTitle')}
+        >
+          <Grid3x3 className="w-3.5 h-3.5" />
+        </button>
+        <div className="w-px h-4 mx-1" style={{ background: 'var(--border-subtle)' }} />
+        <button
+          onClick={() => setPlaying(!playing)}
+          aria-pressed={playing}
+          className="h-[24px] px-1.5 flex items-center gap-1 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={{ color: playing ? '#0e9f6e' : 'var(--text-secondary)' }}
+          title={playing ? t('v3d.pause') : t('v3d.play')}
+        >
+          {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+          {playing ? t('nav.pause') : t('nav.simulate')}
+        </button>
+        <button
+          onClick={requestSim3dReset}
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={{ color: 'var(--text-secondary)' }}
+          title={t('v3d.reset')}
+          aria-label={t('v3d.reset')}
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );

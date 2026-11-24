@@ -23,7 +23,12 @@ export const ExportModal: React.FC = () => {
   const setStatusMessage = useStudioStore((s) => s.setStatusMessage);
   const requestFitView = useStudioStore((s) => s.requestFitView);
 
-  const [tab, setTab] = useState<'exports' | 'marker'>('exports');
+  const initialTab = useStudioStore((s) => s.exportModalTab);
+  const [tab, setTab] = useState<'exports' | 'marker'>(initialTab);
+  // Opening from the toolbar picks the section (files or marker).
+  useEffect(() => {
+    if (open) setTab(initialTab);
+  }, [open, initialTab]);
   const [pdfPreset, setPdfPreset] = useState<'a4_tiled' | 'letter_tiled' | 'a0' | 'projector'>('a4_tiled');
   const [unfoldOnFold, setUnfoldOnFold] = useState(true);
   const [darkProjector, setDarkProjector] = useState(true);
@@ -210,7 +215,7 @@ export const ExportModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-xs flex items-center justify-center p-4">
       <div
-        className="w-full max-w-4xl rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="w-full max-w-4xl rounded-md border shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
       >
         <div className="px-5 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -240,7 +245,7 @@ export const ExportModal: React.FC = () => {
               </button>
             </div>
           </div>
-          <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg hover:bg-[var(--bg-subtle)] cursor-pointer">
+          <button onClick={() => setOpen(false)} className="p-1.5 rounded hover:bg-[var(--bg-subtle)] cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -248,7 +253,7 @@ export const ExportModal: React.FC = () => {
         <div className="p-5 overflow-y-auto space-y-5 text-xs">
           {tab === 'marker' ? (
             <div className="space-y-4">
-              <div className="grid sm:grid-cols-4 gap-3 p-3.5 rounded-xl border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+              <div className="grid sm:grid-cols-4 gap-3 p-3.5 rounded-md border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                 <label className="space-y-1">
                   <span className="block text-[11px]" style={{ color: 'var(--text-secondary)' }}>{t('export.rollWidth')}</span>
                   <input
@@ -282,7 +287,7 @@ export const ExportModal: React.FC = () => {
                 <div className="flex items-end">
                   <button
                     onClick={runMarkerNesting}
-                    className="w-full py-1.5 rounded-lg font-semibold text-white cursor-pointer"
+                    className="w-full py-1.5 rounded font-semibold text-white cursor-pointer"
                     style={{ background: 'var(--accent)' }}
                   >
                     {t('export.renest')}
@@ -318,32 +323,32 @@ export const ExportModal: React.FC = () => {
               {markerPlan && (
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono-num">
-                    <div className="p-3 rounded-xl border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                    <div className="p-3 rounded-md border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                       <div className="text-[10px] font-sans" style={{ color: 'var(--text-muted)' }}>{t('export.yield')}</div>
                       <div className="text-base font-bold mt-0.5">{(markerPlan.used_length_mm / 1000).toFixed(2)} m</div>
                     </div>
-                    <div className="p-3 rounded-xl border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                    <div className="p-3 rounded-md border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                       <div className="text-[10px] font-sans" style={{ color: 'var(--text-muted)' }}>{t('export.efficiency')}</div>
                       <div className="text-base font-bold mt-0.5 text-emerald-600">{markerPlan.efficiency_pct.toFixed(1)}%</div>
                     </div>
-                    <div className="p-3 rounded-xl border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                    <div className="p-3 rounded-md border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                       <div className="text-[10px] font-sans" style={{ color: 'var(--text-muted)' }}>{t('export.waste')}</div>
                       <div className="text-base font-bold mt-0.5 text-amber-600">{markerPlan.waste_pct.toFixed(1)}%</div>
                     </div>
-                    <div className="p-3 rounded-xl border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                    <div className="p-3 rounded-md border" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                       <div className="text-[10px] font-sans" style={{ color: 'var(--text-muted)' }}>{t('export.estCost', { count: markerPlan.piece_count })}</div>
                       <div className="text-base font-bold mt-0.5">{markerPlan.estimated_cost.toFixed(2)}</div>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-strong)' }}>
+                  <div className="rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-strong)' }}>
                     <canvas ref={markerCanvasRef} className="w-full h-64 block" />
                   </div>
 
                   <div className="flex justify-end">
                     <button
                       onClick={handleExportMarkerSvg}
-                      className="px-4 py-2 rounded-lg font-semibold text-white cursor-pointer"
+                      className="px-4 py-2 rounded font-semibold text-white cursor-pointer"
                       style={{ background: 'var(--accent)' }}
                     >
                       {t('export.downloadMarker')}
@@ -355,7 +360,7 @@ export const ExportModal: React.FC = () => {
           ) : (
             <>
               {/* PDF Section */}
-              <div className="p-4 rounded-xl border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+              <div className="p-4 rounded-md border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                 <div className="flex items-center justify-between">
                   <div className="font-semibold text-sm flex items-center gap-2">
                     <FileText className="w-4 h-4 text-blue-600" />
@@ -378,7 +383,7 @@ export const ExportModal: React.FC = () => {
                     <button
                       key={id}
                       onClick={() => setPdfPreset(id)}
-                      className="px-3 py-2 rounded-lg border font-medium text-left cursor-pointer"
+                      className="px-3 py-2 rounded border font-medium text-left cursor-pointer"
                       style={{
                         background: pdfPreset === id ? 'var(--accent-soft)' : 'var(--bg-surface)',
                         borderColor: pdfPreset === id ? 'var(--accent)' : 'var(--border-subtle)',
@@ -410,7 +415,7 @@ export const ExportModal: React.FC = () => {
                 <button
                   onClick={handleExportPdf}
                   disabled={busy}
-                  className="px-4 py-2 rounded-lg font-semibold text-white inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 rounded font-semibold text-white inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
                   style={{ background: 'var(--accent)' }}
                 >
                   {pdfPreset === 'projector' ? <Projector className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
@@ -420,7 +425,7 @@ export const ExportModal: React.FC = () => {
 
               {/* Industrial CAD + GarmentCode + SVG Grid */}
               <div className="grid sm:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                <div className="p-4 rounded-md border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                   <div className="font-semibold text-sm flex items-center gap-2">
                     <FileCode2 className="w-4 h-4 text-amber-600" />
                     {t('export.factory')}
@@ -431,21 +436,21 @@ export const ExportModal: React.FC = () => {
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={handleExportDxf}
-                      className="px-3 py-1.5 rounded-lg border font-medium cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       {t('export.exportDxf')}
                     </button>
                     <button
                       onClick={handleExportRul}
-                      className="px-3 py-1.5 rounded-lg border font-medium cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       {t('export.exportRul')}
                     </button>
                     <button
                       onClick={handleImportDxf}
-                      className="px-3 py-1.5 rounded-lg border font-medium inline-flex items-center gap-1 cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium inline-flex items-center gap-1 cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       <Upload className="w-3.5 h-3.5" />
@@ -453,7 +458,7 @@ export const ExportModal: React.FC = () => {
                     </button>
                     <button
                       onClick={handleImportGarmentCode}
-                      className="px-3 py-1.5 rounded-lg border font-medium inline-flex items-center gap-1 cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium inline-flex items-center gap-1 cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       <Upload className="w-3.5 h-3.5" />
@@ -462,7 +467,7 @@ export const ExportModal: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+                <div className="p-4 rounded-md border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                   <div className="font-semibold text-sm">{t('export.svgTitle')}</div>
                   <p style={{ color: 'var(--text-secondary)' }}>
                     {t('export.svgHelp')}
@@ -473,7 +478,7 @@ export const ExportModal: React.FC = () => {
                         downloadTextFile(`${baseName}_${snapshot.active_size}.svg`, kernel.exportSvgMm(false), 'image/svg+xml');
                         setStatusMessage(t('export.svgDone'));
                       }}
-                      className="px-3 py-1.5 rounded-lg border font-medium cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       SVG ({snapshot.active_size})
@@ -483,7 +488,7 @@ export const ExportModal: React.FC = () => {
                         downloadTextFile(`${baseName}_nested.svg`, kernel.exportSvgMm(true), 'image/svg+xml');
                         setStatusMessage(t('export.nestDone'));
                       }}
-                      className="px-3 py-1.5 rounded-lg border font-medium cursor-pointer"
+                      className="px-3 py-1.5 rounded border font-medium cursor-pointer"
                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                     >
                       {t('export.svgNest')}
@@ -493,7 +498,7 @@ export const ExportModal: React.FC = () => {
               </div>
 
               {/* POM Spec Sheet Preview */}
-              <div className="p-4 rounded-xl border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
+              <div className="p-4 rounded-md border space-y-3" style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}>
                 <div className="flex items-center justify-between">
                   <div className="font-semibold text-sm flex items-center gap-2">
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
@@ -504,14 +509,14 @@ export const ExportModal: React.FC = () => {
                       downloadTextFile(`${baseName}_pom_specs.csv`, kernel.exportPomCsv(), 'text/csv');
                       setStatusMessage(t('export.pomDone'));
                     }}
-                    className="px-3 py-1 rounded-lg border font-medium cursor-pointer"
+                    className="px-3 py-1 rounded border font-medium cursor-pointer"
                     style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
                   >
                     {t('export.exportCsv')}
                   </button>
                 </div>
 
-                <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-surface)' }}>
+                <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-surface)' }}>
                   <table className="w-full text-left font-mono-num text-[11px]">
                     <thead>
                       <tr className="border-b" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}>

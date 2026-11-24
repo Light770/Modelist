@@ -1,10 +1,11 @@
 ---
+// Old /studio links keep working: same app, same query string (template, mode, lang, tab).
 import BaseLayout from "../layouts/BaseLayout.astro";
 import StudioRoot from "../components/studio/StudioRoot";
 import "../styles/global.css";
 ---
 
-<BaseLayout title="Modelist CAD Studio">
+<BaseLayout title="Modelist">
   <div class="h-screen w-screen overflow-hidden">
     <StudioRoot client:only="react" />
   </div>

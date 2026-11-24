@@ -165,7 +165,7 @@ export const ShortcutToolbox: React.FC = () => {
   return (
     <div
       ref={panelRef}
-      className="fixed z-50 rounded-xl border shadow-2xl overflow-hidden select-none backdrop-blur-md"
+      className="fixed z-50 rounded-md border shadow-2xl overflow-hidden select-none backdrop-blur-md"
       style={{
         left,
         top,
@@ -204,7 +204,7 @@ export const ShortcutToolbox: React.FC = () => {
                   handleTogglePin(e, cmd.id);
                 }}
                 title={`${ct('cmd', `${cmd.id}.label`, cmd.label)}${cmd.shortcut ? ` (${cmd.shortcut})` : ''} — ${t('toolbox.unpinHint')}`}
-                className="h-9 rounded-lg border flex flex-col items-center justify-center gap-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition cursor-pointer"
+                className="h-9 rounded border flex flex-col items-center justify-center gap-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] transition cursor-pointer"
                 style={{
                   background: 'var(--bg-surface)',
                   borderColor: 'var(--border-subtle)',

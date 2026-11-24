@@ -3,7 +3,6 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Check,
-  Link2,
   Trash2,
   X,
 } from 'lucide-react';
@@ -78,7 +77,7 @@ export const SeamCommandDialog: React.FC = () => {
     return (
       <div
         onClick={() => setSeamActiveSlot(slot)}
-        className="rounded-lg border p-2 transition cursor-pointer space-y-1.5"
+        className="rounded border p-2 transition cursor-pointer space-y-1.5"
         style={{
           background: active ? `${accentHex}12` : 'var(--bg-panel)',
           borderColor: active ? accentHex : 'var(--border-subtle)',
@@ -161,35 +160,10 @@ export const SeamCommandDialog: React.FC = () => {
   };
 
   return (
-    <div
-      className="absolute top-16 right-4 z-30 w-80 max-h-[calc(100%-6.5rem)] rounded-xl border shadow-2xl flex flex-col overflow-hidden select-none backdrop-blur-md"
-      style={{
-        background: 'var(--bg-surface)',
-        borderColor: 'var(--border-strong)',
-      }}
-    >
-      {/* Fusion 360 Command Dialog Header */}
-      <div
-        className="px-3 py-2 border-b flex items-center justify-between shrink-0"
-        style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
-      >
-        <div className="flex items-center gap-1.5">
-          <Link2 className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-          <span className="text-xs font-semibold">
-            {cmd.mode === 'edit' ? t('seam.editTitle') : t('seam.createTitle')}
-          </span>
-        </div>
-        <button
-          onClick={closeSeamCommand}
-          className="p-1 rounded hover:bg-[var(--bg-subtle)] cursor-pointer"
-          title={t('seam.cancel')}
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
+    // Rendered inside the properties panel, which supplies the title bar and close button.
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden select-none" role="group" aria-label={cmd.mode === 'edit' ? t('seam.editTitle') : t('seam.createTitle')}>
       {/* Scrollable Progressive Body */}
-      <div className="p-3 overflow-y-auto space-y-2.5 text-xs">
+      <div className="p-3 flex-1 min-h-0 overflow-y-auto space-y-2.5 text-xs">
         {/* Step 1: Fusion 360 Geometry Collectors */}
         <div className="space-y-2">
           {renderSlot('a', t('seam.slotA'), '#2563eb', cmd.edgesA, lenA)}
@@ -201,7 +175,7 @@ export const SeamCommandDialog: React.FC = () => {
           <div className="pt-2.5 border-t space-y-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
             {/* Live Length & Ease Balance Meter */}
             <div
-              className="p-2 rounded-lg border space-y-1.5"
+              className="p-2 rounded border space-y-1.5"
               style={{ background: 'var(--bg-panel)', borderColor: 'var(--border-subtle)' }}
             >
               <div className="flex items-center justify-between text-[10px] font-mono-num">

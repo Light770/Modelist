@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Footprints, Link2, Maximize2, Minus, Plus } from 'lucide-react';
+import { Maximize2, Minus, Plus } from 'lucide-react';
 import {
   getHandlePoints,
   getRenderVersion,
@@ -13,10 +13,34 @@ import { detectFlickGesture } from '../../lib/cad/radial-menu';
 import { useStudioStore } from '../../store/studioStore';
 import { t as tr, useT } from '../../lib/i18n';
 import { RadialMarkingMenu } from './RadialMarkingMenu';
-import { SeamCommandDialog } from './SeamCommandDialog';
 
 const RULER_PX = 24;
 const NEST_PALETTE = ['#64748b', '#2563eb', '#059669', '#d97706', '#7c3aed', '#dc2626'];
+
+/** Space at the canvas bottom kept for the navigation bar, px. */
+const NAV_BAR_PX = 44;
+
+/**
+ * Canvas margins hidden by the rulers, the floating panels and the navigation bar, so "fit"
+ * centres the pattern in the part of the canvas the user can actually see.
+ */
+function visibleInsets(rect: DOMRect) {
+  const ins = { left: RULER_PX, right: 0, top: RULER_PX, bottom: NAV_BAR_PX };
+  document.querySelectorAll<HTMLElement>('[data-floating-panel]').forEach((el) => {
+    const r = el.getBoundingClientRect();
+    if (r.bottom <= rect.top || r.top >= rect.bottom || r.right <= rect.left || r.left >= rect.right) return;
+    if (r.height < rect.height * 0.4) {
+      // Collapsed or short panel: it only hides a strip at the top.
+      ins.top = Math.max(ins.top, r.bottom - rect.top + 8);
+      return;
+    }
+    const fromLeft = r.right - rect.left;
+    const fromRight = rect.right - r.left;
+    if (fromLeft < fromRight) ins.left = Math.max(ins.left, fromLeft + 8);
+    else ins.right = Math.max(ins.right, fromRight + 8);
+  });
+  return ins;
+}
 
 interface Camera {
   tx: number;
@@ -95,18 +119,7 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
   const showMirrorUnfold = useStudioStore((s) => s.showMirrorUnfold);
   const workspaceMode = useStudioStore((s) => s.workspaceMode);
   const snapshot = useStudioStore((s) => s.snapshot);
-  const walkFrame = useStudioStore((s) => s.walkFrame);
-  const activeWalkLinkId = useStudioStore((s) => s.activeWalkLinkId);
-  const walkProgress = useStudioStore((s) => s.walkProgress);
-  const slashCount = useStudioStore((s) => s.slashCount);
-  const slashSpreadMm = useStudioStore((s) => s.slashSpreadMm);
-  const slashHingeMode = useStudioStore((s) => s.slashHingeMode);
-  const dartPivotAngleDeg = useStudioStore((s) => s.dartPivotAngleDeg);
-  const trueCornerSquare90 = useStudioStore((s) => s.trueCornerSquare90);
-  const styleSplitAnchor = useStudioStore((s) => s.styleSplitAnchor);
   const seamCommand = useStudioStore((s) => s.seamCommand);
-  const notchStyle = useStudioStore((s) => s.notchStyle);
-  const notchCount = useStudioStore((s) => s.notchCount);
   const fitViewSeq = useStudioStore((s) => s.fitViewSeq);
   const zoomStepDir = useStudioStore((s) => s.zoomStepDir);
   const toggleLayer = useStudioStore((s) => s.toggleLayer);
@@ -134,15 +147,18 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     if (!isFinite(minX)) return;
     const spanX = Math.max(80, maxX - minX);
     const spanY = Math.max(80, maxY - minY);
-    const availW = Math.max(140, rect.width - RULER_PX - 80);
-    const availH = Math.max(140, rect.height - RULER_PX - 110);
+    const ins = visibleInsets(rect);
+    const viewW = Math.max(160, rect.width - ins.left - ins.right);
+    const viewH = Math.max(160, rect.height - ins.top - ins.bottom);
+    const availW = Math.max(120, viewW - 56);
+    const availH = Math.max(120, viewH - 56);
     const scale = Math.max(0.12, Math.min(3.0, Math.min(availW / spanX, availH / spanY)));
     const midX = 0.5 * (minX + maxX);
     const midY = 0.5 * (minY + maxY);
     camRef.current = {
       scale,
-      tx: RULER_PX + (rect.width - RULER_PX) * 0.5 - midX * scale,
-      ty: RULER_PX + (rect.height - RULER_PX) * 0.52 + midY * scale,
+      tx: ins.left + viewW * 0.5 - midX * scale,
+      ty: ins.top + viewH * 0.5 + midY * scale,
     };
     useStudioStore.getState().setCursorTelemetry(
       useStudioStore.getState().cursorWorld,
@@ -163,8 +179,9 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const cx = (rect.width + RULER_PX) * 0.5;
-    const cy = (rect.height + RULER_PX) * 0.5;
+    const ins = visibleInsets(rect);
+    const cx = ins.left + (rect.width - ins.left - ins.right) * 0.5;
+    const cy = ins.top + (rect.height - ins.top - ins.bottom) * 0.5;
     const factor = zoomStepDir > 0 ? 1.18 : 1 / 1.18;
     const cam = camRef.current;
     const wx = (cx - cam.tx) / cam.scale;
@@ -1331,46 +1348,6 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         className="w-full h-full block touch-none"
       />
 
-      {/* CLO3D-Style Floating 2D Display Overlay Pill Bar (Top-Left inside 2D Window) */}
-      <div
-        className="absolute top-8 left-8 flex flex-wrap items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] shadow-xs backdrop-blur-md select-none"
-        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', opacity: 0.94 }}
-      >
-        {(
-          [
-            ['showSeamAllowance', 'SA', showSA],
-            ['showDimensions', 'Dims', showDimensions],
-            ['showSeamColors', 'Seams', showSeamColors],
-            ['showNotches', 'Notches', showNotches],
-            ['showGrainlines', 'Grain', showGrain],
-            ['showGradedNest', 'Nest', showNest],
-          ] as const
-        ).map(([key, label, active]) => (
-          <button
-            key={key}
-            onClick={() => toggleLayer(key)}
-            className="px-1.5 py-0.5 rounded font-medium cursor-pointer transition"
-            style={{
-              background: active ? 'var(--accent-soft)' : 'transparent',
-              color: active ? 'var(--accent)' : 'var(--text-secondary)',
-            }}
-          >
-            {label}
-          </button>
-        ))}
-        <button
-          onClick={toggleMirrorUnfold}
-          className="px-1.5 py-0.5 rounded font-medium cursor-pointer transition"
-          style={{
-            background: showMirrorUnfold ? 'rgba(124, 58, 237, 0.14)' : 'transparent',
-            color: showMirrorUnfold ? '#7c3aed' : 'var(--text-secondary)',
-          }}
-          title={t('v2d.ghost')}
-        >
-          Symmetry
-        </button>
-      </div>
-
       {/* Fusion 360 8-Sector Radial Marking Menu + Contextual Menu */}
       {ctxMenu && (
         <RadialMarkingMenu
@@ -1384,353 +1361,72 @@ export const Viewport2D: React.FC<{ style?: React.CSSProperties }> = ({ style })
         />
       )}
 
-      {/* Fusion 360 Floating Multi-Edge Seam Interface Command Dialog */}
-      <SeamCommandDialog />
-
-      {/* Progressive Contextual Seam Pill when selecting an edge on canvas */}
-      {!seamCommand &&
-        activeTool === 'select' &&
-        snapshot &&
-        snapshot.selected_piece_id &&
-        snapshot.selected_edge_idx !== null && (() => {
-          const selP = snapshot.pieces.find((p) => p.id === snapshot.selected_piece_id);
-          const selE = selP?.edges.find((e) => e.edge_idx === snapshot.selected_edge_idx);
-          if (!selP || !selE) return null;
-          const bound = snapshot.stitching_links.find(
-            (l) =>
-              l.edges_a.some((er) => er.edge_id === selE.edge_id) ||
-              l.edges_b.some((er) => er.edge_id === selE.edge_id),
-          );
-          return (
-            <div
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-3 py-1.5 flex items-center gap-2.5 text-xs backdrop-blur-md"
-              style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-            >
-              <span className="font-semibold">
-                {selP.code} · {selE.label}
-              </span>
-              <span className="font-mono-num text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                {formatMm(selE.length_mm, unit, 1)}
-              </span>
-              {bound ? (
-                <>
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ background: SEAM_PALETTE[bound.color_idx % SEAM_PALETTE.length] }}
-                  />
-                  <span className="text-[11px] truncate max-w-[180px]" style={{ color: 'var(--text-secondary)' }}>
-                    {bound.label} ({bound.ease_mm >= 0 ? '+' : ''}
-                    {formatMm(bound.ease_mm, unit, 1)})
-                  </span>
-                  <button
-                    onClick={() => useStudioStore.getState().openEditSeamCommand(bound)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-medium text-white cursor-pointer text-[11px]"
-                    style={{ background: 'var(--accent)' }}
-                  >
-                    <Link2 className="w-3 h-3" />
-                    Edit Seam
-                  </button>
-                  <button
-                    onClick={() => useStudioStore.getState().startWalkSeam(bound.id)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border hover:bg-[var(--bg-subtle)] cursor-pointer text-[11px]"
-                    style={{ borderColor: 'var(--border-subtle)' }}
-                  >
-                    <Footprints className="w-3 h-3" />
-                    Walk
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() =>
-                    useStudioStore.getState().openCreateSeamCommand({
-                      piece_id: selP.id,
-                      piece_code: selP.code,
-                      edge_id: selE.edge_id,
-                      edge_idx: selE.edge_idx,
-                      edge_label: selE.label,
-                      length_mm: selE.length_mm,
-                      dir: 1,
-                    })
-                  }
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded font-medium text-white cursor-pointer text-[11px]"
-                  style={{ background: 'var(--accent)' }}
-                >
-                  <Link2 className="w-3 h-3" />
-                  Sew This Edge
-                </button>
-              )}
-            </div>
-          );
-        })()}
-
-      {/* Contextual Floating Tool HUDs */}
-      {seamCommand && (
-        <div
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border shadow px-3.5 py-1.5 text-[11px] flex items-center gap-2 backdrop-blur-md"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span
-            className="w-2.5 h-2.5 rounded-full"
-            style={{ background: seamCommand.activeSlot === 'a' ? '#2563eb' : '#0d9488' }}
-          />
-          <span>
-            {t('v2d.collecting')}{' '}
-            <strong>{t('v2d.interface', { slot: seamCommand.activeSlot.toUpperCase() })}</strong>{t('v2d.collectingRest')}{' '}
-            <kbd className="font-mono-num font-semibold">Tab</kbd> {t('v2d.switchSlot')}{' '}
-            <kbd className="font-mono-num font-semibold">Enter</kbd> {t('v2d.commit')}
-          </span>
-        </div>
-      )}
-
-      {activeTool === 'draft_piece' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border shadow px-3.5 py-1.5 text-[11px]"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
-        >
-          {t('v2d.draftHint')}
-        </div>
-      )}
-
-      {activeTool === 'walk_seam' && snapshot && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2.5 flex flex-wrap items-center gap-3 text-xs backdrop-blur-md"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t('v2d.walkSeam')}</span>
-            <select
-              value={activeWalkLinkId ?? ''}
-              onChange={(e) => useStudioStore.getState().startWalkSeam(e.target.value)}
-              className="rounded border px-2 py-1 text-xs"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-            >
-              {snapshot.stitching_links.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={walkProgress}
-              onChange={(e) => useStudioStore.getState().updateWalkProgress(parseFloat(e.target.value))}
-              className="w-32"
-            />
-            <span className="font-mono-num w-9 text-right">{(walkProgress * 100).toFixed(0)}%</span>
-          </div>
-          {walkFrame && (
-            <div className="font-mono-num flex items-center gap-2">
-              <span>A: {formatMm(walkFrame.walked_a_mm, unit)}</span>
-              <span>B: {formatMm(walkFrame.walked_b_mm, unit)}</span>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                {t('v2d.ease')} {walkFrame.ease_delta_mm >= 0 ? '+' : ''}
-                {formatMm(walkFrame.ease_delta_mm, unit)}
-              </span>
-            </div>
-          )}
-          <button
-            onClick={() => useStudioStore.getState().stopWalkSeam()}
-            className="px-2 py-0.5 rounded border text-xs hover:bg-[var(--bg-subtle)] cursor-pointer"
-            style={{ borderColor: 'var(--border-subtle)' }}
-          >
-            Done
-          </button>
-        </div>
-      )}
-
-      {activeTool === 'dart_pivot' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2 flex items-center gap-3 text-xs"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span className="font-semibold">{t('v2d.dartPivot')}</span>
-          <input
-            type="range"
-            min={4}
-            max={30}
-            step={1}
-            value={dartPivotAngleDeg}
-            onChange={(e) => useStudioStore.getState().setDartPivotAngle(Number(e.target.value))}
-            className="w-24"
-          />
-          <span className="font-mono-num">{dartPivotAngleDeg}°</span>
-          <span style={{ color: 'var(--text-secondary)' }}>{t('v2d.clickTargetEdge')}</span>
-        </div>
-      )}
-
-      {activeTool === 'slash_spread' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2 flex items-center gap-3 text-xs"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span className="font-semibold">{t('v2d.slash')}</span>
-          <input
-            type="number"
-            min={1}
-            max={6}
-            value={slashCount}
-            onChange={(e) =>
-              useStudioStore.getState().setSlashParams(Number(e.target.value), slashSpreadMm, slashHingeMode)
-            }
-            className="w-11 rounded border px-1.5 py-0.5 font-mono-num"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-            title={t('v2d.slashes')}
-          />
-          <input
-            type="number"
-            min={5}
-            max={80}
-            value={slashSpreadMm}
-            onChange={(e) =>
-              useStudioStore.getState().setSlashParams(slashCount, Number(e.target.value), slashHingeMode)
-            }
-            className="w-14 rounded border px-1.5 py-0.5 font-mono-num"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-            title={t('v2d.spreadMm')}
-          />
-          <select
-            value={slashHingeMode}
-            onChange={(e) =>
-              useStudioStore
-                .getState()
-                .setSlashParams(slashCount, slashSpreadMm, e.target.value as 'edge_hinge' | 'parallel_shift')
-            }
-            className="rounded border px-2 py-0.5"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-          >
-            <option value="edge_hinge">{t('timeline.edgeHinge')}</option>
-            <option value="parallel_shift">{t('v2d.parallel')}</option>
-          </select>
-        </div>
-      )}
-
-      {activeTool === 'notch' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2 flex items-center gap-2.5 text-xs"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span className="font-semibold">{t('v2d.notch')}</span>
-          <select
-            value={notchStyle}
-            onChange={(e) =>
-              useStudioStore.getState().setNotchOptions(e.target.value as typeof notchStyle, notchCount)
-            }
-            className="rounded border px-2 py-0.5"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-          >
-            <option value="slit">{t('timeline.notchSlit')}</option>
-            <option value="v">{t('timeline.notchV')}</option>
-            <option value="t">{t('timeline.notchT')}</option>
-            <option value="u">{t('timeline.notchU')}</option>
-            <option value="castle">{t('timeline.notchCastle')}</option>
-          </select>
-          <select
-            value={notchCount}
-            onChange={(e) => useStudioStore.getState().setNotchOptions(notchStyle, Number(e.target.value))}
-            className="rounded border px-2 py-0.5 font-mono-num"
-            style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-panel)' }}
-          >
-            <option value={1}>1x</option>
-            <option value={2}>2x</option>
-            <option value={3}>3x</option>
-          </select>
-          <span style={{ color: 'var(--text-secondary)' }}>{t('v2d.clickEdge')}</span>
-        </div>
-      )}
-
-      {activeTool === 'true_corner' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2 flex items-center gap-2.5 text-xs"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span className="font-semibold">{t('v2d.trueCorner')}</span>
-          <button
-            onClick={() => useStudioStore.getState().setTrueCornerSquare90(true)}
-            className="px-2 py-0.5 rounded border cursor-pointer"
-            style={{
-              borderColor: trueCornerSquare90 ? 'var(--accent)' : 'var(--border-subtle)',
-              background: trueCornerSquare90 ? 'var(--accent-soft)' : 'transparent',
-            }}
-          >
-            {t('v2d.square90')}
-          </button>
-          <button
-            onClick={() => useStudioStore.getState().setTrueCornerSquare90(false)}
-            className="px-2 py-0.5 rounded border cursor-pointer"
-            style={{
-              borderColor: !trueCornerSquare90 ? 'var(--accent)' : 'var(--border-subtle)',
-              background: !trueCornerSquare90 ? 'var(--accent-soft)' : 'transparent',
-            }}
-          >
-            {t('v2d.g1Smooth')}
-          </button>
-        </div>
-      )}
-
-      {activeTool === 'style_split' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl border shadow-lg px-4 py-2 flex items-center gap-2.5 text-xs"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-strong)' }}
-        >
-          <span className="font-semibold">{t('v2d.styleSplit')}</span>
-          <span style={{ color: 'var(--text-secondary)' }}>
-            {styleSplitAnchor
-              ? t('v2d.anchorLocked', { index: styleSplitAnchor.edgeIdx + 1 })
-              : t('v2d.styleTwoEdges')}
-          </span>
-        </div>
-      )}
-
-      {activeTool === 'drill_hole' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border shadow px-3.5 py-1.5 text-[11px]"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
-        >
-          {t('v2d.drillProd')}
-        </div>
-      )}
-
-      {activeTool === 'direct_edit' && (
-        <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border shadow px-3.5 py-1.5 text-[11px]"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', color: 'var(--text-secondary)' }}
-        >
-          {t('v2d.editHint')} <kbd className="font-mono-num font-semibold">Shift</kbd> {t('v2d.g1Lock')}
-        </div>
-      )}
-
-      {/* Bottom-Right Zoom Controls */}
+      {/* Navigation bar (bottom centre): zoom, fit and display toggles */}
       <div
-        className="absolute bottom-3 right-3 rounded-lg border shadow-xs flex items-center overflow-hidden"
-        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
+        className="floating-panel absolute bottom-2 left-1/2 -translate-x-1/2 z-10 h-[30px] px-1 flex items-center gap-0.5 select-none text-[11px] whitespace-nowrap"
+        role="toolbar"
+        aria-label={t('nav.title')}
       >
         <button
           onClick={() => useStudioStore.getState().requestZoomStep(-1)}
-          className="p-1.5 hover:bg-[var(--bg-subtle)] cursor-pointer"
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] hover:bg-[var(--bg-hover)] cursor-pointer"
           title={t('v2d.zoomOut')}
+          aria-label={t('v2d.zoomOut')}
         >
           <Minus className="w-3.5 h-3.5" />
         </button>
         <button
           onClick={() => fitView()}
-          className="px-2 py-1.5 border-x text-[11px] font-mono-num hover:bg-[var(--bg-subtle)] cursor-pointer flex items-center gap-1"
-          style={{ borderColor: 'var(--border-subtle)' }}
+          className="h-[24px] px-1.5 flex items-center gap-1 rounded-[3px] hover:bg-[var(--bg-hover)] cursor-pointer"
           title={t('v2d.fitAll')}
         >
-          <Maximize2 className="w-3 h-3" />
-          Fit
+          <Maximize2 className="w-3.5 h-3.5" />
+          {t('nav.fit')}
         </button>
         <button
           onClick={() => useStudioStore.getState().requestZoomStep(1)}
-          className="p-1.5 hover:bg-[var(--bg-subtle)] cursor-pointer"
+          className="w-[26px] h-[24px] flex items-center justify-center rounded-[3px] hover:bg-[var(--bg-hover)] cursor-pointer"
           title={t('v2d.zoomIn')}
+          aria-label={t('v2d.zoomIn')}
         >
           <Plus className="w-3.5 h-3.5" />
+        </button>
+        <div className="w-px h-4 mx-1" style={{ background: 'var(--border-subtle)' }} />
+        {(
+          [
+            ['showSeamAllowance', 'nav.sa', 'nav.saTitle', showSA],
+            ['showDimensions', 'nav.dims', 'nav.dimsTitle', showDimensions],
+            ['showSeamColors', 'nav.seams', 'nav.seamsTitle', showSeamColors],
+            ['showNotches', 'nav.notches', 'nav.notchesTitle', showNotches],
+            ['showGrainlines', 'nav.grain', 'nav.grainTitle', showGrain],
+            ['showGradedNest', 'nav.nest', 'nav.nestTitle', showNest],
+          ] as const
+        ).map(([key, label, title, active]) => (
+          <button
+            key={key}
+            onClick={() => toggleLayer(key)}
+            aria-pressed={active}
+            className="h-[24px] px-1.5 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+            style={{
+              background: active ? 'var(--accent-soft)' : undefined,
+              color: active ? 'var(--accent)' : 'var(--text-secondary)',
+            }}
+            title={t(title)}
+          >
+            {t(label)}
+          </button>
+        ))}
+        <button
+          onClick={toggleMirrorUnfold}
+          aria-pressed={showMirrorUnfold}
+          className="h-[24px] px-1.5 rounded-[3px] cursor-pointer hover:bg-[var(--bg-hover)]"
+          style={{
+            background: showMirrorUnfold ? 'rgba(124, 58, 237, 0.14)' : undefined,
+            color: showMirrorUnfold ? '#7c3aed' : 'var(--text-secondary)',
+          }}
+          title={t('v2d.ghost')}
+        >
+          {t('nav.symmetry')}
         </button>
       </div>
     </div>

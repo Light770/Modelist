@@ -6,12 +6,14 @@ import type {
   AvatarPose,
   Camera3DPreset,
   DisplayUnit,
+  DrapeQuality,
   EaseSpec,
   EdgeRefInfo,
   FitViewMode,
   SeamDriver,
   SeamType,
   SeamWalkFrame,
+  Sim3dStats,
   SnapHit,
   StitchLinkSummary,
   ThemeMode,
@@ -19,6 +21,49 @@ import type {
   UiSnapshot,
   WorkspaceMode,
 } from '../lib/types';
+
+/** Workspaces (the "Design ▾" switch) and the toolbar tabs each one shows. */
+export type WorkspaceId = 'design' | 'production';
+export type ToolbarTab =
+  | 'patterning'
+  | 'sewing'
+  | 'styling'
+  | 'rendering'
+  | 'materials'
+  | 'tools'
+  | 'grading'
+  | 'output';
+export const WORKSPACE_TABS: Record<WorkspaceId, ToolbarTab[]> = {
+  design: ['patterning', 'sewing', 'styling', 'rendering', 'materials', 'tools'],
+  production: ['grading', 'output'],
+};
+
+/** Pages the properties panel can show on request (otherwise it follows the tool / selection). */
+export type PanelPage = 'params' | 'materials' | 'grading' | 'piece';
+
+export interface OpenDocument {
+  id: string;
+  name: string;
+}
+
+/** Small UI preferences kept per machine (panel sizes, last toolbar tab). */
+function loadPref<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(`modelist.ui.${key}`);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+
+function savePref(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(`modelist.ui.${key}`, JSON.stringify(value));
+  } catch {
+    // storage unavailable
+  }
+}
 
 export interface SeamCommandState {
   mode: 'create' | 'edit';
@@ -49,6 +94,30 @@ export interface StudioState {
   splitRatio: number;
   leftPanelOpen: boolean;
   rightPanelOpen: boolean;
+  /** Floating panel geometry and collapse state (persisted per machine). */
+  leftPanelWidth: number;
+  rightPanelWidth: number;
+  leftPanelCollapsed: boolean;
+  rightPanelCollapsed: boolean;
+  /** Active workspace and toolbar tab. */
+  workspace: WorkspaceId;
+  toolbarTab: ToolbarTab;
+  /** Open document tabs (each has its own kernel session). */
+  documents: OpenDocument[];
+  activeDocId: string;
+  /** Project space panel (open documents, templates). */
+  dataPanelOpen: boolean;
+  /** Page explicitly opened in the properties panel; null = follow the active tool / selection. */
+  panelPage: PanelPage | null;
+  /** Context key the user closed the properties panel on; it reappears when the context changes. */
+  panelDismissedKey: string | null;
+  /** 3D drape simulation running (driven from the toolbar). */
+  sim3dPlaying: boolean;
+  /** Bumped to re-arrange and re-drape the 3D garment. */
+  sim3dResetSeq: number;
+  /** Latest 3D solver stats and drape quality, shown in the status bar. */
+  sim3dStats: Sim3dStats | null;
+  sim3dQuality: DrapeQuality | null;
 
   // Fusion 360 Floating Seam Interface Command Dialog State
   seamCommand: SeamCommandState | null;
@@ -74,8 +143,8 @@ export interface StudioState {
   sim3dCameraSeq: number;
 
   // Inspector & Tool Options
-  activeTab: 'measurements' | 'piece' | 'grading' | 'formulas' | 'fabric';
   exportModalOpen: boolean;
+  exportModalTab: 'exports' | 'marker';
   activeWalkLinkId: string | null;
   walkProgress: number;
   walkFrame: SeamWalkFrame | null;
@@ -115,6 +184,20 @@ export interface StudioState {
   toggleLeftPanel: () => void;
   toggleRightPanel: () => void;
   setRightPanelOpen: (open: boolean) => void;
+  setPanelWidth: (side: 'left' | 'right', width: number) => void;
+  togglePanelCollapsed: (side: 'left' | 'right') => void;
+  setToolbarTab: (tab: ToolbarTab) => void;
+  setWorkspace: (ws: WorkspaceId) => void;
+  setDocuments: (docs: OpenDocument[], activeId: string) => void;
+  toggleDataPanel: (open?: boolean) => void;
+  openPanelPage: (page: PanelPage) => void;
+  closePanelPage: () => void;
+  dismissPanel: (key: string | null) => void;
+  /** 2D and 3D views are independent toggles; at least one stays on. */
+  toggleView: (view: '2d' | '3d') => void;
+  setSim3dPlaying: (playing: boolean) => void;
+  requestSim3dReset: () => void;
+  setSim3dTelemetry: (stats: Sim3dStats | null, quality?: DrapeQuality | null) => void;
 
   // Fusion 360 Progressive Seam Command Actions
   openCreateSeamCommand: (initialEdge?: EdgeRefInfo) => void;
@@ -146,8 +229,8 @@ export interface StudioState {
   toggle3dFloor: () => void;
   toggle3dTapeLines: () => void;
   request3dCamera: (preset: Camera3DPreset) => void;
-  setActiveTab: (tab: StudioState['activeTab']) => void;
   setExportModalOpen: (open: boolean) => void;
+  openExportModal: (tab: 'exports' | 'marker') => void;
   startWalkSeam: (linkId: string) => void;
   updateWalkProgress: (u: number) => void;
   stopWalkSeam: () => void;
@@ -219,6 +302,24 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   splitRatio: 0.46,
   leftPanelOpen: true,
   rightPanelOpen: true,
+  leftPanelWidth: loadPref('leftPanelWidth', 248),
+  rightPanelWidth: loadPref('rightPanelWidth', 300),
+  leftPanelCollapsed: loadPref('leftPanelCollapsed', false),
+  rightPanelCollapsed: loadPref('rightPanelCollapsed', false),
+  workspace: loadPref<WorkspaceId>('workspace', 'design'),
+  toolbarTab: (() => {
+    const tab = loadPref<string>('toolbarTab', 'patterning');
+    return (Object.values(WORKSPACE_TABS).flat() as string[]).includes(tab) ? (tab as ToolbarTab) : 'patterning';
+  })(),
+  documents: [],
+  activeDocId: '',
+  dataPanelOpen: false,
+  panelPage: null,
+  panelDismissedKey: null,
+  sim3dPlaying: true,
+  sim3dResetSeq: 0,
+  sim3dStats: null,
+  sim3dQuality: null,
 
   seamCommand: null,
 
@@ -240,8 +341,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   sim3dCameraPreset: 'three_quarter',
   sim3dCameraSeq: 1,
 
-  activeTab: 'measurements',
   exportModalOpen: false,
+  exportModalTab: 'exports',
   activeWalkLinkId: null,
   walkProgress: 0.5,
   walkFrame: null,
@@ -266,7 +367,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   editingOpId: null,
   timelineFilterBySelectedPiece: false,
 
-  setSnapshot: (snapshot) => set({ snapshot }),
+  setSnapshot: (snapshot) =>
+    set((s) => {
+      const doc = s.documents.find((d) => d.id === s.activeDocId);
+      if (doc && doc.name !== snapshot.project_name) {
+        return {
+          snapshot,
+          documents: s.documents.map((d) => (d.id === s.activeDocId ? { ...d, name: snapshot.project_name } : d)),
+        };
+      }
+      return { snapshot };
+    }),
   setReady: (ready, error = null) => set({ ready, error }),
   setActiveTool: (activeTool) => {
     const prev = get().activeTool;
@@ -320,6 +431,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           snapshot: nextSnapshot,
           activeTool,
           seamCommand: null,
+          panelPage: null,
           activeWalkLinkId: firstLink,
           walkFrame: wf,
           styleSplitAnchor: null,
@@ -333,6 +445,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       snapshot: nextSnapshot,
       activeTool,
       seamCommand: null,
+      ...(activeTool !== 'select' && activeTool !== 'pan' ? { panelPage: null } : {}),
       activeWalkLinkId: activeTool === 'walk_seam' ? get().activeWalkLinkId : null,
       walkFrame: activeTool === 'walk_seam' ? get().walkFrame : null,
       measureReadout: null,
@@ -360,10 +473,60 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }));
   },
   setSplitRatio: (ratio) => set({ splitRatio: Math.max(0.24, Math.min(0.76, ratio)) }),
-  toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen, fitViewSeq: s.fitViewSeq + 1 })),
-  toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen, fitViewSeq: s.fitViewSeq + 1 })),
-  setRightPanelOpen: (rightPanelOpen) =>
-    set((s) => ({ rightPanelOpen, fitViewSeq: s.fitViewSeq + 1 })),
+  // Panels float over the canvas, so showing or hiding them never re-fits the view.
+  toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
+  toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
+  // Opening the inspector for a specific tab also expands it if it was collapsed.
+  setRightPanelOpen: (rightPanelOpen) => {
+    if (rightPanelOpen && get().rightPanelCollapsed) savePref('rightPanelCollapsed', false);
+    set(rightPanelOpen ? { rightPanelOpen, rightPanelCollapsed: false } : { rightPanelOpen });
+  },
+  setPanelWidth: (side, width) => {
+    const w = Math.round(Math.max(200, Math.min(520, width)));
+    savePref(side === 'left' ? 'leftPanelWidth' : 'rightPanelWidth', w);
+    set(side === 'left' ? { leftPanelWidth: w } : { rightPanelWidth: w });
+  },
+  togglePanelCollapsed: (side) =>
+    set((s) => {
+      const key = side === 'left' ? 'leftPanelCollapsed' : 'rightPanelCollapsed';
+      const next = !s[key];
+      savePref(key, next);
+      return { [key]: next } as Partial<StudioState>;
+    }),
+  setToolbarTab: (toolbarTab) => {
+    savePref('toolbarTab', toolbarTab);
+    const workspace = WORKSPACE_TABS.design.includes(toolbarTab) ? 'design' : 'production';
+    savePref('workspace', workspace);
+    set({ toolbarTab, workspace });
+  },
+  setWorkspace: (workspace) => {
+    savePref('workspace', workspace);
+    const tab = WORKSPACE_TABS[workspace].includes(get().toolbarTab) ? get().toolbarTab : WORKSPACE_TABS[workspace][0];
+    savePref('toolbarTab', tab);
+    set({ workspace, toolbarTab: tab });
+  },
+  setDocuments: (documents, activeDocId) => set({ documents, activeDocId }),
+  toggleDataPanel: (open) => set((s) => ({ dataPanelOpen: open ?? !s.dataPanelOpen })),
+  openPanelPage: (panelPage) => set({ panelPage, rightPanelOpen: true, rightPanelCollapsed: false }),
+  closePanelPage: () => set({ panelPage: null }),
+  dismissPanel: (panelDismissedKey) => set({ panelDismissedKey }),
+  toggleView: (view) => {
+    const mode = get().workspaceMode;
+    const has2d = mode !== '3d';
+    const has3d = mode !== '2d';
+    let next2d = view === '2d' ? !has2d : has2d;
+    let next3d = view === '3d' ? !has3d : has3d;
+    // Turning off the only visible view switches to the other one.
+    if (!next2d && !next3d) {
+      next2d = view === '3d';
+      next3d = view === '2d';
+    }
+    get().setWorkspaceMode(next2d && next3d ? 'split' : next3d ? '3d' : '2d');
+  },
+  setSim3dPlaying: (sim3dPlaying) => set({ sim3dPlaying }),
+  requestSim3dReset: () => set((s) => ({ sim3dResetSeq: s.sim3dResetSeq + 1 })),
+  setSim3dTelemetry: (sim3dStats, quality) =>
+    set((s) => ({ sim3dStats, sim3dQuality: quality === undefined ? s.sim3dQuality : quality })),
 
   openCreateSeamCommand: (initialEdge) => {
     const cmd: SeamCommandState = {
@@ -383,6 +546,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set({
       activeTool: 'sew_segment',
       lastCommandId: 'sew_segment',
+      panelPage: null,
       seamCommand: cmd,
       statusMessage: initialEdge
         ? `Interface A locked (${initialEdge.piece_code} ${initialEdge.edge_label}) — click partner edge(s) for Interface B`
@@ -409,6 +573,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set({
       snapshot: nextSnap,
       activeTool: 'sew_segment',
+      panelPage: null,
       seamCommand: cmd,
       statusMessage: `Editing seam "${link.label}" — click 2D edges to add/remove, flip direction, or tune ease`,
     });
@@ -557,8 +722,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   toggle3dTapeLines: () => set((s) => ({ show3dTapeLines: !s.show3dTapeLines })),
   request3dCamera: (sim3dCameraPreset) =>
     set((s) => ({ sim3dCameraPreset, sim3dCameraSeq: s.sim3dCameraSeq + 1 })),
-  setActiveTab: (activeTab) => set({ activeTab }),
   setExportModalOpen: (exportModalOpen) => set({ exportModalOpen }),
+  openExportModal: (exportModalTab) => set({ exportModalOpen: true, exportModalTab }),
   startWalkSeam: (linkId) => {
     syncDraftPreview(null);
     const frame = kernel.computeSeamWalk(linkId, get().walkProgress);
