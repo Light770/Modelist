@@ -11,7 +11,7 @@ use std::collections::HashSet;
 /// Cell size for the cloth spatial hash, m.
 const CELL_SIZE: f32 = 0.018;
 /// Maximum positional separation per substep, m (prevents explosive impulses).
-const MAX_SELF_PUSH: f32 = 0.0012;
+const MAX_SELF_PUSH: f32 = 0.0016;
 /// Maximum grid dimension per axis so an exploded outlier vertex cannot OOM.
 const MAX_GRID_DIM: usize = 160;
 
@@ -34,7 +34,7 @@ pub(crate) struct ClothSpatialHash {
     tri_lo_hi: Vec<(Vec3, Vec3)>,
     sew_pairs: HashSet<(usize, usize)>,
     sewn_panel_pairs: HashSet<(u16, u16)>,
-    vert_near_seam: Vec<bool>,
+    is_seam_vert: Vec<bool>,
     vert_panel: Vec<u16>,
     vert_layer: Vec<u8>,
 }
@@ -84,16 +84,7 @@ impl ClothSpatialHash {
                 }
             }
         }
-        let mut vert_near_seam = is_seam_vert.clone();
-        for t in tris {
-            if t.iter().any(|&v| is_seam_vert.get(v).copied().unwrap_or(false)) {
-                for &v in t {
-                    if v < vert_near_seam.len() {
-                        vert_near_seam[v] = true;
-                    }
-                }
-            }
-        }
+        let _ = tris;
         Self {
             origin: Vec3::ZERO,
             h: CELL_SIZE,
@@ -103,7 +94,7 @@ impl ClothSpatialHash {
             tri_lo_hi: Vec::new(),
             sew_pairs,
             sewn_panel_pairs,
-            vert_near_seam,
+            is_seam_vert,
             vert_panel,
             vert_layer,
         }
@@ -217,6 +208,7 @@ impl ClothSpatialHash {
         tris: &[[usize; 3]],
         tri_layer: &[u8],
         thickness: f32,
+        same_garment_only: bool,
         out: &mut Vec<SelfContact>,
     ) {
         out.clear();
@@ -256,6 +248,12 @@ impl ClothSpatialHash {
                     continue;
                 }
                 let tri = tris[ti as usize];
+                let v_layer = self.vert_layer.get(v).copied().unwrap_or(1);
+                let t_layer = tri_layer.get(ti as usize).copied().unwrap_or(1);
+                let t_panel = self.vert_panel.get(tri[0]).copied().unwrap_or(0);
+                if same_garment_only && (t_panel == v_panel || (v_layer / 4) != (t_layer / 4)) {
+                    continue;
+                }
                 if tri[0] == v || tri[1] == v || tri[2] == v {
                     continue;
                 }
@@ -278,7 +276,6 @@ impl ClothSpatialHash {
                 let tri_n = pb.sub(pa).cross(pc.sub(pa)).normalized();
                 // Same-panel vertices closer than 1.5*thickness in 2D rest space are neighbors; skip
                 // unless they genuinely folded across opposite sides.
-                let t_panel = self.vert_panel.get(tri[0]).copied().unwrap_or(0);
                 // On the same panel, skip local neighborhood vertices so curved hems/darts
                 // never push against their own adjacent triangles, and skip tangential grazing.
                 if t_panel == v_panel {
@@ -299,12 +296,12 @@ impl ClothSpatialHash {
                         (t_panel, v_panel)
                     };
                     if self.sewn_panel_pairs.contains(&pair)
-                        && self.vert_near_seam.get(v).copied().unwrap_or(false)
-                        && (self.vert_near_seam.get(tri[0]).copied().unwrap_or(false)
-                            || self.vert_near_seam.get(tri[1]).copied().unwrap_or(false)
-                            || self.vert_near_seam.get(tri[2]).copied().unwrap_or(false))
+                        && self.is_seam_vert.get(v).copied().unwrap_or(false)
+                        && (self.is_seam_vert.get(tri[0]).copied().unwrap_or(false)
+                            || self.is_seam_vert.get(tri[1]).copied().unwrap_or(false)
+                            || self.is_seam_vert.get(tri[2]).copied().unwrap_or(false))
                     {
-                        let seam_thresh = (thickness * 6.0) * (thickness * 6.0);
+                        let seam_thresh = (thickness * 3.5) * (thickness * 3.5);
                         if p.sub(pa).len_sq() < seam_thresh
                             || p.sub(pb).len_sq() < seam_thresh
                             || p.sub(pc).len_sq() < seam_thresh
@@ -313,8 +310,6 @@ impl ClothSpatialHash {
                         }
                     }
                 }
-                let v_layer = self.vert_layer.get(v).copied().unwrap_or(1);
-                let t_layer = tri_layer.get(ti as usize).copied().unwrap_or(1);
                 let mut normal = if t_panel != v_panel && v_layer != t_layer {
                     // Enforce one-sided layer separation: outer layers stay on +tri_n, inner on -tri_n.
                     if v_layer > t_layer {
@@ -373,7 +368,7 @@ pub(crate) fn resolve_self_contacts(
         if wsum <= 1e-12 {
             continue;
         }
-        let push = (c.penetration * 0.6).min(MAX_SELF_PUSH);
+        let push = (c.penetration * 0.65).min(MAX_SELF_PUSH);
         let corr = c.normal.scale(push / wsum);
         let dv = corr.scale(wv);
         let d0 = corr.scale(w0);
@@ -483,7 +478,7 @@ mod tests {
         let thickness = 0.004_f32;
         for _ in 0..8 {
             hash.rebuild(&pos, &tris, thickness + 0.002);
-            hash.detect(&pos, &tris, &tri_layer, thickness, &mut contacts);
+            hash.detect(&pos, &tris, &tri_layer, thickness, false, &mut contacts);
             resolve_self_contacts(&mut pos, &mut prev, &inv_mass, &contacts, 0.2);
         }
         let dz = (pos[0].z - pos[3].z).abs();
@@ -511,7 +506,7 @@ mod tests {
         let thickness = 0.003_f32;
         for _ in 0..6 {
             hash.rebuild(&pos, &tris, thickness + 0.002);
-            hash.detect(&pos, &tris, &tri_layer, thickness, &mut contacts);
+            hash.detect(&pos, &tris, &tri_layer, thickness, false, &mut contacts);
             resolve_self_contacts(&mut pos, &mut prev, &inv_mass, &contacts, 0.1);
         }
         assert!(

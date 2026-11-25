@@ -59,7 +59,7 @@ const WAIST_SLACK: f32 = 0.015;
 /// Clearance an outer garment layer is placed at around the inner layer's cloth, m.
 const LAYER_PLACE_GAP: f32 = 0.010;
 /// Air gap kept between two garment layers on top of their half thicknesses, m.
-const LAYER_AIR_GAP: f32 = 0.0012;
+const LAYER_AIR_GAP: f32 = 0.0022;
 /// Search radius for the cloth of another layer, m.
 const LAYER_SEARCH: f32 = 0.03;
 /// Deepest a vertex may sit on the wrong side of another layer and still be pushed back, m.
@@ -2006,7 +2006,20 @@ impl ClothSimSession {
                         }
                     }
                 }
-                if let Some(newpos) = place_trim(pm, &anchors) {
+                if let Some(mut newpos) = place_trim(pm, &anchors) {
+                    if piece.cut_quantity == 2 && piece.mirror_fold_edge.is_none() {
+                        let is_second = trims
+                            .iter()
+                            .take_while(|(_, pidx, _)| *pidx < *panel_idx)
+                            .any(|(other_pi, _, _)| *other_pi == *pi);
+                        let radial_shift = if is_second { -0.003_f32 } else { 0.003_f32 };
+                        for p in &mut newpos {
+                            if p.z > 0.0 && p.x.abs() < 0.05 {
+                                let (_, out) = avatar.eval_sdf(*p);
+                                *p = p.add(out.scale(radial_shift));
+                            }
+                        }
+                    }
                     positions[range.start..range.end].copy_from_slice(&newpos);
                 }
             }
@@ -3252,7 +3265,7 @@ impl ClothSimSession {
             self.options.wind_mps[1],
             self.options.wind_mps[2],
         );
-        let self_thick = (2.0 * self.avg_thickness).max(0.0028);
+        let self_thick = (2.2 * self.avg_thickness).max(0.0032);
         for _ in 0..num_steps {
             self.step_count += 1;
             let f = self.step_count as f32;
@@ -3304,7 +3317,7 @@ impl ClothSimSession {
             };
             let jitter_ramp = ((f - (sew_frames + settle_frames + 30.0)) / 25.0).clamp(0.0, 1.0);
             let self_tris: Vec<[usize; 3]> =
-                if self.options.enable_self_collision && !layered && f >= sew_frames {
+                if self.options.enable_self_collision && f >= sew_frames {
                 self.core.tris.iter().map(|t| t.v).collect()
             } else {
                 Vec::new()
@@ -3356,6 +3369,7 @@ impl ClothSimSession {
                             &self_tris,
                             &self.tri_layer,
                             self_thick,
+                            layered,
                             &mut self.self_contacts,
                         );
                         resolve_self_contacts(
@@ -3368,6 +3382,9 @@ impl ClothSimSession {
                     }
                     self.core.solve_sew_inelastic(max_pull * 0.5);
                     self.solve_seam_welds(f >= sew_frames, f >= sew_frames + 10.0);
+                    if layered {
+                        self.solve_layer_contacts();
+                    }
                     if !self.drawstrings.is_empty() && f >= sew_frames {
                         for ds in &mut self.drawstrings {
                             ds.step(
@@ -3455,6 +3472,7 @@ impl ClothSimSession {
                             &self_tris,
                             &self.tri_layer,
                             self_thick,
+                            layered,
                             &mut self.self_contacts,
                         );
                         resolve_self_contacts(
@@ -3485,6 +3503,9 @@ impl ClothSimSession {
                     self.collide_body_points();
                     self.core.solve_sew_inelastic(max_pull * 0.5);
                     self.solve_seam_welds(f >= sew_frames, f >= sew_frames + 10.0);
+                    if layered {
+                        self.solve_layer_contacts();
+                    }
                     if !self.drawstrings.is_empty() && f >= sew_frames {
                         for ds in &mut self.drawstrings {
                             ds.step(
@@ -3849,9 +3870,7 @@ impl ClothSimSession {
                 // inner garment drapes exactly as it would alone (no self-collision is needed to
                 // keep it from being shoved into hollows such as under the bust).
                 let tri_w = [inv[t[0]] * b[0], inv[t[1]] * b[1], inv[t[2]] * b[2]];
-                let (wv, wt) = if !c.stacked {
-                    (inv[v], tri_w)
-                } else if self.vert_layer[v] > self.vert_layer[t[0]] {
+                let (wv, wt) = if self.vert_layer[v] > self.vert_layer[t[0]] {
                     (inv[v], [0.0; 3])
                 } else {
                     (0.0, tri_w)
